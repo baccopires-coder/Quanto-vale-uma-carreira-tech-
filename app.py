@@ -1,0 +1,1426 @@
+import html as _html
+import colorsys
+import re
+import json
+import unicodedata
+import urllib.request
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+import ia
+import motor
+from motor import MIN_N, ORDEM_EXP, ORDEM_NIVEL
+
+st.set_page_config(page_title="Quanto vale uma carreira tech?", page_icon="📊", layout="wide")
+
+# ----------------------------------------------------------------------
+# Paleta: fundo azul-petróleo escuro, com teal, violeta e âmbar como acentos (sem brilho/glow)
+# ----------------------------------------------------------------------
+BG = "#151B2D"
+AZUL, AZUL_CLARO, ROXO, ROXO_ESCURO = "#5B9BF6", "#8DB8F8", "#9A7CF2", "#6247C9"
+AMBAR, TEAL, ROSA = "#F2A93B", "#35D0BA", "#F28DB8"
+
+
+def hexhsl(h, s=60, l=62):
+    """Cor em HSL (matiz 0-360, saturação e luminosidade em %) devolvida como #rrggbb."""
+    r, g, b = colorsys.hls_to_rgb((h % 360) / 360, l / 100, s / 100)
+    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+
+
+def deslize(base_h, j, n, amplitude=28):
+    """Matiz do item j de n: a família do grupo com um deslize suave de matiz ao longo da lista."""
+    return base_h + ((j / (n - 1) - 0.5) * amplitude if n > 1 else 0)
+
+
+def rampa(n, h0=262, h1=150, s=56, l=63):
+    """Sequência ordenada (baixo -> alto) com transição contínua de matiz, para categorias com ordem."""
+    return [hexhsl(h0 + (h1 - h0) * (i / (n - 1) if n > 1 else 0), s, l) for i in range(n)]
+
+
+# A ideia da página inteira: cada FAMÍLIA de cor identifica um grupo e aparece igual em botões, cartões e gráficos;
+# dentro do grupo o tom desliza suavemente. Cores fixas de significado: teal = você, âmbar = o que falta/alvo.
+ESCALA = [[0.0, hexhsl(218, 48, 34)], [0.5, hexhsl(196, 52, 46)], [1.0, hexhsl(168, 58, 60)]]  # azul -> teal
+CORES_CAT = [hexhsl(h, 58, 64) for h in (212, 172, 255, 38, 350, 140, 300)] + ["#94A3B8"]
+PAR = [AZUL, ROXO]  # Brasil x sua região
+TOP_AREAS = 5  # quantas áreas priorizar nas telas que seguem o perfil da pessoa
+
+# Grupos de tecnologias (formulário, lacunas, H3), na ordem de motor.BLOCOS
+MATIZES = [172, 212, 255, 38, 140, 280, 305]
+MATIZ_CAT = dict(zip(motor.BLOCOS.values(), MATIZES))
+MATIZ_EIXO = {eixo: MATIZ_CAT[cat] for cat, eixo in motor.ROTULO_EIXO.items()}
+MATIZ_EIXO.update({"Experiência": 195, "Senioridade": 285})
+
+# Grupos de profissões (cartões do ranking, gráficos por profissão)
+MATIZ_GRUPO = {
+    "Análise/BI e Negócios": 38,
+    "Engenharia e Arquitetura de Dados": 212,
+    "Ciência de Dados, ML/IA e Pesquisa": 255,
+    "Engenharia de Software e Outras": 172,
+    "Produto e Suporte": 345,
+    "Gestão e Liderança": 140,
+}
+GRUPO_COR = {g: hexhsl(h, 58, 64) for g, h in MATIZ_GRUPO.items()}
+
+
+def _matiz_cargos():
+    por_grupo = {}
+    for cargo in motor.CARGOS:
+        por_grupo.setdefault(motor.GRUPO[cargo], []).append(cargo)
+    return {
+        cargo: deslize(MATIZ_GRUPO[g], j, len(cs))
+        for g, cs in por_grupo.items()
+        for j, cargo in enumerate(cs)
+    }
+
+
+MATIZ_CARGO = _matiz_cargos()
+COR_CARGO = {c: hexhsl(h, 58, 64) for c, h in MATIZ_CARGO.items()}
+COR_NIVEL = dict(zip(ORDEM_NIVEL, rampa(len(ORDEM_NIVEL))))
+
+ROTULO_CONTRATO = {
+    "Empreendedor ou Empregado (CNPJ)": "PJ / CNPJ",
+    "Empregado (CLT)": "CLT",
+    "Servidor Público": "Servidor público",
+    "Freelancer": "Freelancer",
+}
+
+UF_REGIAO = {
+    **dict.fromkeys(["AC", "AP", "AM", "PA", "RO", "RR", "TO"], "Norte"),
+    **dict.fromkeys(["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"], "Nordeste"),
+    **dict.fromkeys(["DF", "GO", "MT", "MS"], "Centro-oeste"),
+    **dict.fromkeys(["ES", "MG", "RJ", "SP"], "Sudeste"),
+    **dict.fromkeys(["PR", "RS", "SC"], "Sul"),
+}
+
+# Filtros do painel geral: uma família por filtro
+FILTROS = [
+    ("Região", "regiao", motor.REGIOES, None),
+    ("Senioridade", "senioridade", ORDEM_NIVEL, None),
+    ("Tipo de contrato", "contrato", None, lambda o: ROTULO_CONTRATO.get(o, o)),
+    ("Porte da empresa", "tamanho_empresa", motor.ORDEM_PORTE, None),
+]
+MATIZ_FILTRO = {"regiao": 172, "senioridade": 255, "contrato": 38, "tamanho_empresa": 212}
+
+_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Figtree:wght@400;500;600&display=swap');
+.stApp { background: __BG__; }
+/* texto corrido em cinza-azulado suave (não branco puro) e destaques um tom acima */
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li { color: #C9D1E8; }
+[data-testid="stMarkdownContainer"] strong { color: #E6EBF8; }
+[data-testid="stCaptionContainer"] p { color: #9FB0D6; }
+.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5 { color: #E6EBF8; }
+.st-key-resultado { scroll-margin-top: 4.5rem; }
+.ok { background: hsla(172,45%,50%,.09); border: 1px solid hsla(172,50%,62%,.32); border-radius: 12px;
+  padding: 12px 16px; color: #C9D1E8; font-size: .95rem; line-height: 1.5; margin-top: 2px; }
+.ok b { color: hsl(172,60%,80%); }
+html, body, .stApp, [data-testid="stMarkdownContainer"], .stApp button, .stApp input, .stApp textarea, .stApp label {
+  font-family: 'Figtree', system-ui, sans-serif; -webkit-text-size-adjust: 100%; }
+.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5 { font-family: 'Fraunces', Georgia, serif; font-weight: 600;
+  letter-spacing: -.01em; }
+[data-testid="stMain"] { scroll-behavior: smooth; }
+[data-testid="stMainBlockContainer"] { max-width: 100% !important; padding: 0 !important; }
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] { gap: 0 !important; }
+.st-key-secao_1, .st-key-secao_2, .st-key-secao_3 {
+  position: relative; min-height: 100vh; min-height: 100svh; padding: 3.5rem max(clamp(1rem, 5vw, 5rem), calc((100% - 1040px) / 2)) 4rem; }
+.st-key-secao_1 { background: __BG__; }
+.st-key-secao_2 { background: hsl(226,27%,14.5%); border-top: 1px solid rgba(255,255,255,.1); box-shadow: 0 -20px 50px rgba(0,0,0,.4); }
+.st-key-secao_3 { background: hsl(206,27%,13.5%); border-top: 1px solid rgba(255,255,255,.1); box-shadow: 0 -20px 50px rgba(0,0,0,.4); }
+.st-key-secao_1::after, .st-key-secao_2::after { content: ""; position: absolute; inset: 0;
+  background: #080B15; opacity: var(--dim, 0); pointer-events: none; z-index: 50; }
+
+.kicker { font-size: .98rem; color: #9FB0D6; margin: 0 0 .6rem 0; }
+h1.titulo { font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: clamp(1.9rem, 5.4vw, 3.2rem);
+  line-height: 1.1; color: #E6EBF8; margin: 0 0 .4rem 0; padding: 0; }
+h1.titulo span.sub { display: block; font-family: 'Figtree', sans-serif; font-size: clamp(1rem, 2.6vw, 1.15rem);
+  font-weight: 400; color: #B4C0E4; margin-top: .9rem; max-width: 60ch; line-height: 1.55; }
+h2.secao { font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: clamp(1.5rem, 4vw, 2.2rem);
+  margin: 0 0 .4rem 0; padding: 0; line-height: 1.15; color: #E6EBF8; }
+p.secao-sub { color: #B4C0E4; margin: 0 0 1.4rem 0; max-width: 70ch; line-height: 1.55; }
+
+.ct { font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: 1.1rem; color: #E6EBF8;
+  margin: 1.3rem 0 .2rem 0; line-height: 1.25; }
+
+[data-testid="stMetric"] { background: #1C2238; border: 1px solid rgba(255,255,255,.09);
+  border-radius: 12px; padding: 14px 18px; min-height: 108px; overflow: hidden; }
+[data-testid="stMetricLabel"] p { font-size: .9rem; color: #9FB0D6; }
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] * { font-family: 'Fraunces', Georgia, serif;
+  font-weight: 600; white-space: normal !important; overflow: visible !important; line-height: 1.2 !important;
+  overflow-wrap: anywhere !important; }
+.st-key-kpi_1 [data-testid="stMetric"] { background: hsla(255,45%,60%,.10); border-color: hsla(255,55%,72%,.35); }
+.st-key-kpi_2 [data-testid="stMetric"] { background: hsla(172,45%,50%,.09); border-color: hsla(172,50%,62%,.35); }
+.st-key-kpi_3 [data-testid="stMetric"] { background: hsla(212,50%,55%,.09); border-color: hsla(212,55%,66%,.35); }
+.st-key-kpi_4 [data-testid="stMetric"] { background: hsla(38,60%,52%,.09); border-color: hsla(38,70%,62%,.35); }
+[data-testid="stSidebar"] { background: #181E33; border-right: 1px solid rgba(255,255,255,.07); }
+
+button[data-testid="stBaseButton-primary"], button[data-testid="stBaseButton-primaryFormSubmit"],
+button[data-testid="stBaseButton-secondary"], button[data-testid="stFormSubmitButton"] { border-radius: 999px !important; }
+button[data-testid="stBaseButton-primary"], button[data-testid="stBaseButton-primaryFormSubmit"] {
+  background: hsla(172,55%,58%,.16) !important; border: 1px solid hsla(172,60%,62%,.6) !important;
+  min-height: 3.4rem; transition: background .15s, border-color .15s; }
+button[data-testid="stBaseButton-primary"] p, button[data-testid="stBaseButton-primaryFormSubmit"] p {
+  color: hsl(172,60%,84%) !important; font-weight: 600; font-size: 1.05rem; }
+button[data-testid="stBaseButton-primary"]:hover, button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
+  background: hsl(172,62%,64%) !important; border-color: hsl(172,62%,64%) !important; }
+button[data-testid="stBaseButton-primary"]:hover p, button[data-testid="stBaseButton-primaryFormSubmit"]:hover p {
+  color: __BG__ !important; }
+
+[data-testid="stButtonGroup"] { flex-wrap: wrap !important; gap: .5rem !important; }
+[data-testid="stButtonGroup"] > div { flex-wrap: wrap !important; }
+button[data-testid^="stBaseButton-pills"], button[data-variant="pills"] { border-radius: 999px !important; white-space: nowrap; min-height: 38px;
+  font-size: .92rem; padding: 0 16px; color: #D5DCF0; background: var(--pbg, rgba(255,255,255,.04));
+  border: 1px solid var(--pbd, rgba(255,255,255,.16)) !important;
+  transition: background .15s, border-color .15s, filter .15s; }
+button[data-testid^="stBaseButton-pills"]:hover, button[data-variant="pills"]:hover { filter: brightness(1.35); }
+button[data-variant="pills"]:is([data-testid="stBaseButton-pillsActive"], [data-selected="true"], [aria-pressed="true"], [aria-checked="true"]), button[data-testid="stBaseButton-pillsActive"] {
+  background: var(--psel, __TEAL__) !important; border-color: var(--psel, __TEAL__) !important; font-weight: 600; }
+button[data-variant="pills"]:is([data-testid="stBaseButton-pillsActive"], [data-selected="true"], [aria-pressed="true"], [aria-checked="true"]) p, button[data-testid="stBaseButton-pillsActive"] p { color: __BG__ !important; }
+span[data-baseweb="tag"] { background-color: __ROXO_ESCURO__ !important; }
+.st-key-painel_filtros { background: #1C2238; border-radius: 12px; padding: .5rem .8rem; }
+
+.dica { border: 1px solid rgba(242,169,59,.3); background: rgba(242,169,59,.08); padding: .75rem 1rem;
+  border-radius: 10px; color: #F3E3BF; font-size: .95rem; margin: 0 0 .8rem 0; line-height: 1.5; }
+.grupo { font-weight: 600; font-size: 1rem; color: #CFD8F2; margin: 1.5rem 0 .55rem 0; }
+.pergunta { font-size: .95rem; font-weight: 500; color: #B4C0E4; margin: .9rem 0 .4rem 0; }
+[class*="st-key-grupo_"][data-testid="stVerticalBlock"], [class*="st-key-grupo_"] > [data-testid="stVerticalBlock"] {
+  flex-direction: row !important; flex-wrap: wrap !important; gap: .5rem !important; }
+[class*="st-key-grupo_"] [data-testid="stElementContainer"] { width: auto !important; flex: 0 0 auto !important; }
+[class*="st-key-grupo_"] [data-testid="stButtonGroup"] { flex-wrap: nowrap !important; }
+
+.rk-lista { display: flex; flex-direction: column; gap: 10px; margin: .6rem 0 1rem 0; }
+.rk { display: grid; grid-template-columns: 2.4rem 1fr auto; gap: 16px; align-items: center;
+  background: var(--t, #1C2238); border: 1px solid var(--b, rgba(255,255,255,.09)); border-radius: 12px; padding: 16px 20px; }
+.rk.topo { border-color: var(--c, __TEAL__); }
+.rk .pos { font-family: 'Fraunces', Georgia, serif; font-size: 1.8rem; font-weight: 600; color: var(--c, #7F8DB5); text-align: center; }
+.rk .nome { font-weight: 600; font-size: 1.1rem; color: #E6EBF8; line-height: 1.25; }
+.rk .meta { color: #9FB0D6; font-size: .88rem; margin-top: 2px; }
+.rk .barra { height: 6px; border-radius: 999px; background: rgba(255,255,255,.09); margin-top: 10px; overflow: hidden; }
+.rk .barra i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--c2, __AZUL__), var(--c, __TEAL__)); }
+.rk .fim { text-align: right; min-width: 11rem; }
+.rk .pct { font-family: 'Fraunces', Georgia, serif; font-size: 2rem; font-weight: 600; color: #E6EBF8; line-height: 1; }
+.rk .sal { color: #9FB0D6; font-size: .84rem; margin-top: 4px; line-height: 1.35; }
+.rk .sal + .sal { margin-top: 0; }
+
+.gap { background: var(--t, #1C2238); border: 1px solid var(--b, rgba(255,255,255,.09)); border-radius: 12px; padding: 14px 18px; margin-bottom: 10px; }
+.gap .t { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.gap .t b { color: #E6EBF8; font-size: 1.05rem; font-family: 'Fraunces', Georgia, serif; font-weight: 600; }
+.gap .v { color: __TEAL__; font-weight: 600; font-size: .92rem; }
+.gap .a { color: __AMBAR__; font-weight: 600; margin-left: 12px; font-size: .92rem; }
+.gap .bar { position: relative; height: 6px; border-radius: 999px; background: rgba(255,255,255,.1); margin: 12px 0 10px; }
+.gap .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: __TEAL__; border-radius: 999px; }
+.gap .bar u { position: absolute; top: -4px; bottom: -4px; width: 3px; border-radius: 2px; background: __AMBAR__; }
+.gap p { margin: 0; color: #B4C0E4; font-size: .92rem; line-height: 1.45; }
+
+#carreira-nav { position: fixed; right: 18px; top: 50%; transform: translateY(-50%); z-index: 99999;
+  display: flex; flex-direction: column; gap: 14px; padding: 12px 8px; border-radius: 999px;
+  background: rgba(28,34,56,.92); border: 1px solid rgba(255,255,255,.14); box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+#carreira-nav button { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--c, #9FB0D6);
+  background: transparent; padding: 0; cursor: pointer; position: relative; transition: transform .2s, background .2s; }
+#carreira-nav button.on { background: var(--c, __TEAL__); transform: scale(1.3); }
+#carreira-nav button:nth-child(1) { --c: hsl(172,62%,60%); }
+#carreira-nav button:nth-child(2) { --c: hsl(212,80%,70%); }
+#carreira-nav button:nth-child(3) { --c: hsl(255,75%,76%); }
+#carreira-nav button::before { content: attr(data-nome); position: absolute; right: 24px; top: 50%;
+  transform: translateY(-50%); white-space: nowrap; background: #1C2238; border: 1px solid rgba(255,255,255,.14);
+  color: #CBD3EA; padding: 5px 12px; border-radius: 8px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .15s; }
+#carreira-nav button:hover::before { opacity: 1; }
+
+/* texto corrido mais confortável */
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li { line-height: 1.62; }
+.st-key-analise { max-width: 74ch; }
+.st-key-analise [data-testid="stMarkdownContainer"] h3 { margin-top: 1.5rem; font-size: 1.3rem; }
+.st-key-analise [data-testid="stMarkdownContainer"] strong { color: #E6EBF8; }
+
+/* campos, avisos, expansores e conversa seguem a mesma linguagem: cantos suaves e bordas discretas */
+[data-baseweb="select"] > div { border-radius: 10px !important; background: #1C2238 !important;
+  border-color: rgba(255,255,255,.14) !important; }
+[data-testid="stExpander"] { border: 1px solid rgba(255,255,255,.1) !important; border-radius: 12px !important; background: #192033; }
+[data-testid="stAlert"] { border-radius: 10px; }
+[data-testid="stChatMessage"] { border-radius: 14px; padding: 14px 16px; background: hsla(172,40%,50%,.06);
+  border: 1px solid hsla(172,45%,60%,.16); }
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) { background: hsla(255,40%,60%,.08);
+  border-color: hsla(255,45%,70%,.2); }
+
+/* cada grupo de botões do formulário vive num painel com o tom da sua família */
+[class*="st-key-caixa_"] { border-radius: 14px; padding: 16px 20px 20px !important; margin-bottom: 14px; gap: .5rem !important; }
+[class*="st-key-caixa_"] .grupo { margin: 0 0 .5rem 0; font-size: 1.02rem; }
+.st-key-caixa_momento { background: hsla(285,35%,60%,.06); border: 1px solid hsla(285,40%,72%,.18); }
+.st-key-caixa_momento .grupo { color: hsl(285,55%,82%); }
+
+/* diagramação: cabeçalhos centralizados, linhas de texto equilibradas, sem ícones de link nos títulos */
+[data-testid="stHeaderActionElements"] { display: none !important; }
+.hero { text-align: center; max-width: 780px; margin: 0 auto 2.4rem auto; }
+.hero .kicker { margin: 0 0 .8rem 0; }
+.hero h1.titulo { margin: 0 0 1rem 0; text-wrap: balance; }
+.hero .hero-sub { font-size: clamp(1rem, 2.6vw, 1.15rem); line-height: 1.6; color: #B4C0E4; margin: 0 auto; max-width: 62ch; text-wrap: balance; }
+h2.secao { text-align: center; text-wrap: balance; }
+p.secao-sub { text-align: center; margin: 0 auto 2rem auto; text-wrap: balance; }
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li { text-wrap: pretty; }
+.ct, .stApp h3, .stApp h4 { text-wrap: balance; }
+
+/* resumo do perfil */
+.perfil { background: #1C2238; border: 1px solid rgba(255,255,255,.09); border-radius: 12px; padding: 18px 22px; }
+.perfil-fatos { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 24px; }
+.perfil-fatos span { display: block; font-size: .82rem; color: #9FB0D6; margin-bottom: 2px; }
+.perfil-fatos b { font-weight: 600; color: #E6EBF8; font-size: 1rem; line-height: 1.35; }
+.perfil-rotulo { font-size: .82rem; color: #9FB0D6; margin: 18px 0 8px 0; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.08); }
+.perfil-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.perfil-tags i { font-style: normal; font-size: .84rem; padding: 3px 11px; border-radius: 999px; color: #D5DCF0;
+  border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.05); }
+
+/* rodapé "Sobre os dados" */
+.st-key-rodape { position: relative; z-index: 4; background: hsl(226,25%,10.5%); border-top: 1px solid rgba(255,255,255,.1);
+  padding: 3rem max(clamp(1rem, 5vw, 5rem), calc((100% - 1040px) / 2)) 3.4rem; }
+.sobre h2.secao { font-size: clamp(1.3rem, 3vw, 1.7rem); margin-bottom: 1.6rem; }
+.sobre-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+.sobre-item { background: #1C2238; border: 1px solid rgba(255,255,255,.09); border-radius: 12px; padding: 16px 18px; }
+.sobre-item .t { font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: 1.02rem; color: #E6EBF8; margin-bottom: 6px; }
+.sobre-item p { margin: 0; font-size: .9rem; line-height: 1.55; color: #B4C0E4; }
+@media (max-width: 1100px) { .sobre-grid { grid-template-columns: repeat(3, 1fr); } }
+
+/* respiro e centralização: topo livre do cabeçalho do Streamlit, textos arejados, botões e títulos no eixo central */
+.st-key-secao_1 { padding-top: 6.5rem; }
+.st-key-secao_2, .st-key-secao_3 { padding-top: 5rem; }
+.hero { max-width: 760px; margin: 0 auto 3.2rem auto; }
+.hero .kicker { margin: 0 0 1rem 0; letter-spacing: .01em; }
+.hero h1.titulo { margin: 0 0 1.5rem 0; line-height: 1.15; }
+.hero .hero-sub { font-size: clamp(1.02rem, 2.4vw, 1.2rem); line-height: 1.75; max-width: 56ch; }
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li { line-height: 1.72; }
+p.secao-sub { line-height: 1.7; max-width: 62ch; margin-bottom: 2.4rem; }
+h2.secao { margin-bottom: .8rem; }
+.grupo, .pergunta { text-align: center; }
+[class*="st-key-caixa_"] { padding: 24px 28px 28px !important; margin-bottom: 20px; }
+[class*="st-key-grupo_"][data-testid="stVerticalBlock"], [class*="st-key-grupo_"] > [data-testid="stVerticalBlock"] {
+  justify-content: center !important; gap: .6rem !important; }
+[data-testid="stButtonGroup"] { display: flex !important; justify-content: center; }
+[data-testid="stButtonGroup"] > div { display: flex !important; flex-wrap: wrap !important; justify-content: center !important; gap: .6rem !important; }
+[class*="st-key-caixa_mom_"] { align-items: center; }
+.st-key-painel_filtros { padding: .9rem 1.2rem 1.3rem; }
+.ct { text-align: center; margin-top: 1.7rem; }
+.st-key-resultado [data-testid="stHeading"] { margin-top: 1.8rem; }
+.st-key-resultado [data-testid="stHeading"] h2, .st-key-resultado [data-testid="stHeading"] h3 { text-align: center; }
+.st-key-analise { margin: 0 auto; }
+.perfil-fatos > div, .perfil-rotulo, .sobre-item { text-align: center; }
+.perfil-tags { justify-content: center; }
+[data-testid="stMetric"] { align-items: center; text-align: center; }
+[data-testid="stMetricLabel"], [data-testid="stMetricValue"] { width: 100%; justify-content: center; text-align: center; }
+
+/* indicadores: mesma altura e valores numéricos numa linha só */
+[data-testid="stMetric"] { min-height: 132px; }
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] * { font-size: clamp(1.45rem, 2.1vw, 1.9rem) !important; }
+.st-key-kpi_1 [data-testid="stMetricValue"] *, .st-key-kpi_2 [data-testid="stMetricValue"] *,
+.st-key-kpi_3 [data-testid="stMetricValue"] * { white-space: nowrap !important; }
+
+/* o fim de cada camada precisa continuar alcançável: a próxima só começa a cobrir depois de um respiro */
+.st-key-secao_1, .st-key-secao_2 { padding-bottom: clamp(7rem, 38vh, 22rem); }
+
+/* abertura: selo, título com acento, frase curta e três números em destaque */
+.abertura { text-align: center; max-width: 820px; margin: 0 auto 2.4rem auto; }
+.abertura .eyebrow { display: inline-flex; align-items: center; gap: .55rem; font-size: .88rem; color: hsl(172,45%,80%);
+  border: 1px solid hsla(172,50%,62%,.35); background: hsla(172,45%,50%,.08); border-radius: 999px; padding: .4rem 1rem; margin-bottom: 1.6rem; }
+.abertura .eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: hsl(172,62%,60%); flex: none; }
+.abertura h1.titulo { font-size: clamp(2.3rem, 6.4vw, 3.9rem); line-height: 1.08; margin: 0 0 1.3rem 0; text-wrap: balance; }
+.abertura h1.titulo .acento { color: hsl(172,60%,72%); }
+.abertura .hero-sub { font-size: clamp(1.02rem, 2.3vw, 1.2rem); line-height: 1.7; color: #B4C0E4; max-width: 50ch;
+  margin: 0 auto 2rem auto; text-wrap: balance; }
+.abertura .stats { display: grid; grid-template-columns: repeat(3, 1fr); max-width: 560px; margin: 0 auto;
+  border: 1px solid rgba(255,255,255,.1); border-radius: 14px; background: #1C2238; }
+.abertura .stats > div { padding: 16px 10px; }
+.abertura .stats > div + div { border-left: 1px solid rgba(255,255,255,.09); }
+.abertura .stats b { display: block; font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: clamp(1.5rem, 4vw, 2rem);
+  color: #E6EBF8; line-height: 1.1; }
+.abertura .stats span { display: block; font-size: .84rem; color: #9FB0D6; margin-top: 4px; line-height: 1.3; }
+div.como { text-align: center; color: #9FB0D6; font-size: .95rem; margin: 0 auto 1.2rem auto; max-width: 52ch; line-height: 1.55; text-wrap: balance; }
+.etapa { display: flex; align-items: center; justify-content: center; gap: .7rem; font-family: 'Fraunces', Georgia, serif;
+  font-weight: 600; font-size: clamp(1.15rem, 3vw, 1.4rem); color: #E6EBF8; margin: 2.4rem 0 1.1rem 0; }
+.etapa b { width: 2rem; height: 2rem; border-radius: 50%; display: grid; place-items: center; font-family: 'Figtree', sans-serif;
+  font-size: .95rem; font-weight: 600; background: hsla(172,55%,58%,.16); border: 1px solid hsla(172,60%,62%,.6); color: hsl(172,60%,84%); flex: none; }
+.etapa.primeira { margin-top: .4rem; }
+
+@media (max-width: 768px) {
+  .st-key-rodape { padding: 2rem 1rem 2.4rem; }
+  .sobre-grid { grid-template-columns: 1fr; }
+  .hero { margin-bottom: 1.6rem; }
+  .abertura { margin-bottom: 1.4rem; }
+  .abertura .eyebrow { font-size: .8rem; padding: .35rem .85rem; margin-bottom: 1.2rem; }
+  .abertura .hero-sub { margin-bottom: 1.4rem; }
+  .abertura .stats > div { padding: 12px 4px; }
+  .abertura .stats span { font-size: .76rem; }
+  .etapa { margin: 1.8rem 0 .9rem 0; }
+  [class*="st-key-caixa_"] { padding: 12px 12px 14px !important; }
+  #carreira-nav { display: none !important; }
+  .st-key-secao_1, .st-key-secao_2, .st-key-secao_3 { min-height: 0; padding: 1.6rem 1rem 2.6rem; box-shadow: none; }
+  .st-key-secao_1::after, .st-key-secao_2::after { display: none; }
+  [data-testid="stHorizontalBlock"] { gap: .8rem !important; }
+  [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) { flex-wrap: wrap !important; gap: .6rem !important; }
+  [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) > div { min-width: calc(50% - .4rem) !important;
+    flex: 1 1 calc(50% - .4rem) !important; }
+  [data-testid="stMetric"] { min-height: 0; padding: 10px 12px; }
+  [data-testid="stMetricValue"], [data-testid="stMetricValue"] * { font-size: 1.35rem !important; }
+  [data-testid="stMetricLabel"] p { font-size: .8rem; }
+  button[data-testid^="stBaseButton-pills"], button[data-variant="pills"] { min-height: 42px; font-size: .9rem; }
+  button[data-testid="stBaseButton-primary"], button[data-testid="stBaseButton-primaryFormSubmit"],
+  button[data-testid="stBaseButton-secondary"] { min-height: 3rem; }
+  .gap { padding: 12px 14px; }
+  .ct { font-size: 1.02rem; margin-top: 1rem; }
+  .rk { grid-template-columns: 1.8rem 1fr; gap: 10px 12px; padding: 14px; }
+  .rk .fim { grid-column: 2; text-align: left; min-width: 0; }
+  .rk .pct { font-size: 1.6rem; }
+  [data-testid="stPlotlyChart"] { margin-left: -.35rem; margin-right: -.35rem; }
+}
+@media (max-width: 768px) { .st-key-secao_1 { padding-top: 5.2rem; } .st-key-secao_2, .st-key-secao_3 { padding-top: 3rem; }
+  [class*="st-key-caixa_"] { padding: 16px 14px 18px !important; } }
+@media (prefers-reduced-motion: reduce) { [data-testid="stMain"] { scroll-behavior: auto; } }
+"""
+
+for _k, _v in {"__TEAL__": TEAL, "__AMBAR__": AMBAR, "__ROXO_ESCURO__": ROXO_ESCURO, "__AZUL__": AZUL, "__BG__": BG}.items():
+    _CSS = _CSS.replace(_k, _v)
+st.markdown(f"<style>{_CSS}</style>", unsafe_allow_html=True)
+
+_JS_EMPILHAR = """
+<script>
+(function () {
+  var doc = document;
+  try { if (window.frameElement && window.parent && window.parent.document) doc = window.parent.document; } catch (e) {}
+  var win = doc.defaultView || window;
+  if (win.__carreira && win.__carreira.stop) win.__carreira.stop();
+
+  var IDS = ["secao_1", "secao_2", "secao_3"];
+  var NOMES = ["Descobrir minha área", "Painel geral", "Hipóteses do projeto"];
+  var reduz = win.matchMedia && win.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var estado = { timer: null, alvoScroll: null, nav: null };
+
+  function achar() {
+    var s = IDS.map(function (i) { return doc.querySelector(".st-key-" + i); });
+    if (s.some(function (x) { return !x; })) return null;
+    var p = s[0].parentElement;
+    while (p && !(p.contains(s[1]) && p.contains(s[2]))) p = p.parentElement;
+    if (!p) return null;
+    var ns = s.map(function (x) { var n = x; while (n.parentElement !== p) n = n.parentElement; return n; });
+    var sc = p;
+    while (sc && sc !== doc.body && sc !== doc.documentElement) {
+      var o = win.getComputedStyle(sc).overflowY;
+      if (o === "auto" || o === "scroll") break;
+      sc = sc.parentElement;
+    }
+    var janela = !sc || sc === doc.body || sc === doc.documentElement;
+    return { s: s, ns: ns, p: p, sc: janela ? doc.scrollingElement : sc, janela: janela };
+  }
+  function topoViewport(g) { return g.janela ? 0 : g.sc.getBoundingClientRect().top; }
+  function altura(g) { return g.janela ? win.innerHeight : g.sc.clientHeight; }
+
+  function layout() {
+    var g = achar(); if (!g) return null;
+    var vh = altura(g), celular = win.innerWidth <= 768;
+    g.ns.forEach(function (n, i) {
+      if (celular) {
+        n.style.position = "relative"; n.style.top = "auto";
+      } else if (i < g.ns.length - 1) {
+        n.style.position = "sticky";
+        n.style.top = Math.min(0, vh - n.offsetHeight) + "px";
+      }
+      n.style.zIndex = String(i + 1);
+    });
+    return g;
+  }
+  function alvos(g) {
+    var base = g.p.getBoundingClientRect().top - topoViewport(g) + g.sc.scrollTop;
+    var out = [], acc = base;
+    g.ns.forEach(function (n) { out.push(acc); acc += n.offsetHeight; });
+    return out;
+  }
+  function aoRolar() {
+    var g = achar(); if (!g) return;
+    var vh = altura(g), topo = topoViewport(g);
+    for (var i = 0; i < g.s.length - 1; i++) {
+      var r = g.ns[i + 1].getBoundingClientRect().top - topo;
+      var prog = Math.max(0, Math.min(1, 1 - r / vh));
+      g.s[i].style.setProperty("--dim", (reduz || win.innerWidth <= 768) ? "0" : (prog * 0.6).toFixed(3));
+    }
+    if (estado.nav) {
+      var al = alvos(g), ativo = 0;
+      al.forEach(function (t, i) { if (g.sc.scrollTop >= t - vh * 0.4) ativo = i; });
+      Array.prototype.forEach.call(estado.nav.children, function (b, i) { b.classList.toggle("on", i === ativo); });
+    }
+  }
+  function criarNav() {
+    var antigo = doc.getElementById("carreira-nav"); if (antigo) antigo.remove();
+    var nav = doc.createElement("div"); nav.id = "carreira-nav";
+    NOMES.forEach(function (nome, i) {
+      var b = doc.createElement("button"); b.type = "button";
+      b.setAttribute("data-nome", nome); b.setAttribute("aria-label", nome);
+      b.onclick = function () {
+        var g = achar(); if (!g) return;
+        g.sc.scrollTo({ top: alvos(g)[i], behavior: reduz ? "auto" : "smooth" });
+      };
+      nav.appendChild(b);
+    });
+    doc.body.appendChild(nav); estado.nav = nav;
+  }
+  function ligar() {
+    var g = layout(); if (!g) return;
+    var alvo = g.janela ? win : g.sc;
+    if (estado.alvoScroll === alvo) return;
+    if (estado.alvoScroll) estado.alvoScroll.removeEventListener("scroll", aoRolar);
+    alvo.addEventListener("scroll", aoRolar, { passive: true });
+    estado.alvoScroll = alvo; aoRolar();
+  }
+  criarNav(); ligar();
+  estado.timer = win.setInterval(function () { ligar(); layout(); aoRolar(); }, 500);
+  win.addEventListener("resize", layout);
+  win.__carreira = { stop: function () {
+    win.clearInterval(estado.timer);
+    if (estado.alvoScroll) estado.alvoScroll.removeEventListener("scroll", aoRolar);
+    win.removeEventListener("resize", layout);
+    var n = doc.getElementById("carreira-nav"); if (n) n.remove();
+  } };
+})();
+</script>
+"""
+
+
+
+def instalar_empilhamento():
+    try:
+        st.html(_JS_EMPILHAR, unsafe_allow_javascript=True)
+    except TypeError:
+        import streamlit.components.v1 as components
+        components.html(_JS_EMPILHAR, height=0)
+
+
+def rolar_para(seletor):
+    """Leva a página até um elemento (ao entrar no resultado ou ao refazer a entrevista)."""
+    ss_ = st.session_state
+    ss_["rolar_n"] = ss_.get("rolar_n", 0) + 1
+    js = """<script>
+(function () {
+  var doc = document;
+  try { if (window.frameElement && window.parent && window.parent.document) doc = window.parent.document; } catch (e) {}
+  var win = doc.defaultView || window;
+  var reduz = win.matchMedia && win.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var tentativas = 0;
+  function achar() { return doc.querySelector("__SEL__"); }
+  function ir(suave) {
+    var el = achar();
+    if (!el) { if (tentativas++ < 30) win.setTimeout(function () { ir(suave); }, 100); return; }
+    el.scrollIntoView({ block: "start", behavior: (suave && !reduz) ? "smooth" : "auto" });
+  }
+  win.setTimeout(function () { ir(true); }, 150);
+  win.setTimeout(function () {  // confere o resultado final: o layout pode mudar enquanto a página carrega
+    var el = achar();
+    if (el) { var t = el.getBoundingClientRect().top; if (t < 20 || t > 160) el.scrollIntoView({ block: "start", behavior: "auto" }); }
+  }, 1100);
+})();
+</script><!-- __N__ -->""".replace("__SEL__", seletor).replace("__N__", str(ss_["rolar_n"]))
+    try:
+        st.html(js, unsafe_allow_javascript=True)
+    except TypeError:
+        import streamlit.components.v1 as components
+        components.html(js, height=0)
+
+
+@st.cache_resource
+def get_base_v2():
+    return motor.carregar_base()
+
+
+@st.cache_resource
+def get_geojson():
+    local = motor.PASTA / "dados" / "brasil_estados.geojson"
+    if local.exists():
+        return json.loads(local.read_text(encoding="utf-8"))
+    with urllib.request.urlopen(motor.URL_GEOJSON, timeout=15) as r:
+        return json.load(r)
+
+
+def moeda(v):
+    return "R$ " + f"{v:,.0f}".replace(",", ".")
+
+
+FONTE = "Figtree, system-ui, sans-serif"
+CFG = {"displayModeBar": False}
+
+
+def titulo_grafico(texto):
+    st.markdown(f'<div class="ct">{_html.escape(texto)}</div>', unsafe_allow_html=True)
+
+
+def _quebra_rotulo(texto, n, max_linhas=2):
+    """Quebra um rótulo em linhas de até ~n caracteres (também depois de '/'), no máximo max_linhas.
+    O texto completo continua no hover, porque só o rótulo do eixo é encurtado."""
+    texto = str(texto)
+    if len(texto) <= n:
+        return texto
+    if len(texto) > n * max_linhas:
+        texto = texto[: n * max_linhas - 1].rstrip() + "…"
+    texto = texto.replace("/", "/ ")
+    linhas, atual = [], ""
+    for p in texto.split():
+        if atual and len(atual) + 1 + len(p) > n:
+            linhas.append(atual)
+            atual = p
+        else:
+            atual = f"{atual} {p}".strip()
+    linhas.append(atual)
+    return "<br>".join(linhas[:max_linhas])
+
+
+def _faixa_curta(txt):
+    """'de R$ 4.001/mês a R$ 6.000/mês' -> '4–6k'."""
+    nums = [int(n.replace(".", "")) for n in re.findall(r"\d[\d.]*\d|\d", txt)]
+    if txt.startswith("Menos"):
+        return f"< {nums[0] // 1000}k"
+    if txt.startswith("Acima"):
+        return f"> {nums[0] // 1000}k"
+    return f"{round(nums[0] / 1000)}–{nums[1] // 1000}k"
+
+
+def _ajustar_rotulos(fig):
+    """Eixos categóricos: rótulos quebrados em linhas curtas, sem rotação, para caber em telas estreitas."""
+    for eixo_dado, eixo_fig, largura in (("x", fig.update_xaxes, 11), ("y", fig.update_yaxes, 28)):
+        cats = []
+        for tr in fig.data:
+            if tr.type not in ("bar", "scatter"):
+                continue
+            horizontal = getattr(tr, "orientation", None) == "h"
+            if (eixo_dado == "y") != horizontal:
+                continue
+            valores = getattr(tr, eixo_dado, None)
+            if valores is None:
+                continue
+            for v in valores:
+                if isinstance(v, str) and v not in cats:
+                    cats.append(v)
+        if not cats or len(cats) > 8 and eixo_dado == "x":
+            continue
+        kw = dict(tickmode="array", tickvals=cats, ticktext=[_quebra_rotulo(c, largura) for c in cats])
+        if eixo_dado == "x":
+            kw["tickangle"] = 0
+        eixo_fig(**kw)
+        if eixo_dado == "y" and max(len(c) for c in cats) > 40:  # rótulos muito longos: mais altura por barra
+            fig.update_layout(height=max(fig.layout.height or 0, len(cats) * 40 + 70))
+
+
+def estilizar(fig):
+    fig.update_layout(
+        title=None,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#CBD3EA", family=FONTE, size=13),
+        margin=dict(l=8, r=8, t=16, b=8),
+        coloraxis_showscale=False,
+        dragmode=False,
+        legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, title_text=""),
+    )
+    fig.update_layout(
+        bargap=0.28,
+        hoverlabel=dict(bgcolor="#1C2238", bordercolor="rgba(255,255,255,.2)", font=dict(family=FONTE, color="#E6EBF8", size=13)),
+    )
+    eixo = dict(gridcolor="rgba(255,255,255,.06)", zeroline=False, automargin=True, tickfont=dict(color="#B4C0E4"),
+                title_font=dict(color="#9FB0D6", size=12))
+    fig.update_xaxes(**eixo)
+    fig.update_yaxes(**eixo)
+    _ajustar_rotulos(fig)
+    try:  # cantos arredondados nas barras (plotly 5.19+); em versões antigas simplesmente não se aplica
+        fig.update_traces(marker_cornerradius=5, selector=dict(type="bar"))
+    except Exception:
+        pass
+    return fig
+
+
+def mostrar(fig, titulo):
+    titulo_grafico(titulo)
+    st.plotly_chart(estilizar(fig), width="stretch", config=CFG)
+
+
+try:
+    base = get_base_v2()
+except FileNotFoundError as e:
+    st.error(str(e))
+    st.stop()
+
+sec1 = st.container(key="secao_1")
+sec2 = st.container(key="secao_2")
+sec3 = st.container(key="secao_3")
+rodape = st.container(key="rodape")  # "Sobre os dados": fica depois de tudo, na horizontal
+with rodape:
+    st.markdown(
+        '<div class="sobre"><h2 class="secao">Sobre os dados</h2><div class="sobre-grid">'
+        '<div class="sobre-item"><div class="t">Fonte</div><p>State of Data Brazil 2025-2026 '
+        '(Data Hackers + Bain &amp; Company), microdados no Kaggle.</p></div>'
+        '<div class="sobre-item"><div class="t">Escopo</div><p>Quem vive no Brasil e é CLT, PJ, servidor ou freelancer.</p></div>'
+        f'<div class="sobre-item"><div class="t">Abrangência</div><p>{len(base.todas_profissoes)} profissões '
+        f'(técnicas e de gestão) e {len(base.habilidades)} tecnologias e práticas da base.</p></div>'
+        f'<div class="sobre-item"><div class="t">Privacidade</div><p>Só resultados agregados; recortes cruzados exigem '
+        f'no mínimo {MIN_N} pessoas; região = macrorregião; gênero, cor/raça e deficiência não são usados.</p></div>'
+        '<div class="sobre-item"><div class="t">Limites</div><p>Salário em faixas (usamos o ponto médio), amostra '
+        'voluntária concentrada no Sudeste, dados de fim de 2025 / início de 2026. A pesquisa não tem cidade, '
+        'então <strong>não há dado por capital</strong>.</p></div>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+# Instalado aqui (e não no fim do arquivo): assim a navegação existe mesmo que algo mais abaixo interrompa o script.
+# O contêiner acima já reservou os lugares das seções, então este elemento fica depois delas.
+instalar_empilhamento()
+
+
+def chat():
+    ss = st.session_state
+    ss.setdefault("msgs", [{"role": "assistant", "content": ia.SAUDACAO}])
+    for m in ss.msgs:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+    texto_usuario = st.chat_input("Digite sua resposta…")
+    if texto_usuario:
+        ss.msgs.append({"role": "user", "content": texto_usuario})
+        try:
+            with st.spinner("Pensando…"):
+                resposta, perfil = ia.proxima(base, ss.msgs)
+        except Exception as e:
+            ss.msgs.pop()
+            st.error(f"Não consegui falar com a IA ({type(e).__name__}). Tente de novo ou use o formulário.")
+            return
+        if resposta:
+            ss.msgs.append({"role": "assistant", "content": resposta})
+        if perfil:
+            ss.perfil = perfil
+            ss.rolar = "resultado"
+        st.rerun()
+
+
+def opcoes_filtro(coluna, ordem=None):
+    existentes = set(base.df[coluna].dropna().unique())
+    return [o for o in ordem if o in existentes] if ordem else sorted(existentes)
+
+
+# Botão marcado: o Streamlit novo usa data-selected / aria-pressed / aria-checked; o antigo, data-testid=...pillsActive
+SEL_ATIVO = ':is([data-testid="stBaseButton-pillsActive"], [data-selected="true"], [aria-pressed="true"], [aria-checked="true"])'
+
+
+def _css_grupo(prefixo, n, matiz):
+    regras = []
+    for j in range(n):
+        h = round(deslize(matiz, j, n))
+        s = f".st-key-{prefixo}_{j}"
+        regras.append(
+            f"{s} button {{ background: hsla({h},55%,58%,.14) !important; border-color: hsla({h},60%,62%,.55) !important; }}"
+            f"{s} button{SEL_ATIVO} {{ background: hsl({h},62%,64%) !important; "
+            f"border-color: hsl({h},62%,64%) !important; }}"
+        )
+    return regras
+
+
+def css_botoes(base):
+    """Cor de cada botão: família por grupo e deslize suave de matiz ao longo da ordem em que aparecem."""
+    regras = []
+    for i, (cat, hs) in enumerate(base.categorias.items()):
+        h = MATIZ_CAT.get(cat, 200)
+        regras += _css_grupo(f"t_{i}", len(hs), h)
+        regras.append(
+            f".st-key-caixa_{i} {{ background: hsla({h},40%,52%,.06); border: 1px solid hsla({h},45%,64%,.18); }}"
+            f".st-key-caixa_{i} .grupo {{ color: hsl({h},60%,80%); }}"
+        )
+    for _, coluna, ordem, _ in FILTROS:
+        regras += _css_grupo(f"flt_{coluna}", len(opcoes_filtro(coluna, ordem)), MATIZ_FILTRO[coluna])
+    # "Seu momento": um matiz por pergunta, deslizando de leve do violeta ao orquídea
+    for k, _, h in MOMENTO:
+        regras.append(
+            f".st-key-caixa_mom_{k} {{ background: hsla({h},40%,52%,.06); border: 1px solid hsla({h},45%,64%,.18); }}"
+            f".st-key-caixa_mom_{k} .grupo {{ color: hsl({h},60%,80%); }}"
+        )
+        regras.append(
+            f".st-key-mom_{k} button {{ background: hsla({h},55%,62%,.14) !important; border-color: hsla({h},60%,70%,.5) !important; }}"
+            f".st-key-mom_{k} button{SEL_ATIVO} {{ background: hsl({h},58%,72%) !important; "
+            f"border-color: hsl({h},58%,72%) !important; }}"
+        )
+    return "\n".join(regras)
+
+
+def botoes(prefixo, opcoes, rotulos=None):
+    """Um botão (pill) por opção, cada um com chave própria para poder receber a sua cor. Devolve as marcadas."""
+    marcadas = []
+    for j, o in enumerate(opcoes):
+        marcadas += st.pills(
+            o, [o], selection_mode="multi", key=f"{prefixo}_{j}", label_visibility="collapsed", format_func=rotulos or str
+        ) or []
+    return marcadas
+
+
+def _chave_alfa(txt):
+    """Ordena sem diferenciar maiúsculas e acentos (Álgebra antes de Banco)."""
+    return unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode().lower()
+
+
+MOMENTO = [
+    ("exp", "Experiência na área", 268),
+    ("nivel", "Nível atual", 282),
+    ("reg", "Macrorregião onde mora", 296),
+    ("int", "O que mais gosta de fazer", 310),
+]
+
+
+def _momento(chave, titulo, opcoes):
+    """Pergunta de escolha única, na mesma caixa e diagramação dos grupos de tecnologias."""
+    with st.container(key=f"caixa_mom_{chave}"):
+        st.markdown(f'<div class="grupo">{_html.escape(titulo)}</div>', unsafe_allow_html=True)
+        return st.pills(titulo, opcoes, selection_mode="single", key=f"mom_{chave}", label_visibility="collapsed")
+
+
+def formulario():
+    st.markdown(
+        '<div class="como">Toque nos botões para marcar e toque de novo para desmarcar. '
+        "Pode deixar qualquer grupo em branco.</div>",
+        unsafe_allow_html=True,
+    )
+    with st.form("form_perfil", border=False):
+        st.markdown('<div class="etapa primeira"><b>1</b>Suas tecnologias</div>', unsafe_allow_html=True)
+        escolhidas = []
+        for i, (cat, hs) in enumerate(base.categorias.items()):
+            with st.container(key=f"caixa_{i}"):
+                st.markdown(f'<div class="grupo">{_html.escape(cat)}</div>', unsafe_allow_html=True)
+                with st.container(key=f"grupo_{i}"):
+                    escolhidas += botoes(f"t_{i}", sorted(hs, key=_chave_alfa))
+        st.markdown('<div class="etapa"><b>2</b>Seu momento</div>', unsafe_allow_html=True)
+        exp = _momento("exp", "Experiência na área", ["Nenhuma"] + ORDEM_EXP) or "Nenhuma"
+        nivel = _momento("nivel", "Nível atual", ia.NIVEIS) or "Ainda não atuo na área"
+        regiao = _momento("reg", "Macrorregião onde mora", motor.REGIOES) or "Não informado"
+        interesse = _momento("int", "O que mais gosta de fazer", list(motor.INTERESSES)) or "Sem preferência"
+        if st.form_submit_button("Concluir e ver minha recomendação", type="primary", width="stretch"):
+            st.session_state.perfil = ia.validar_perfil(
+                dict(habilidades=escolhidas, experiencia=exp, nivel=nivel, regiao=regiao, interesse=interesse), base
+            )
+            st.session_state.rolar = "resultado"
+            st.rerun()
+
+
+def comparativo(br, rg, col, ordem, titulo, regiao, linha=False):
+    partes = [br.assign(Onde="Brasil")]
+    if not rg.empty:
+        partes.append(rg.assign(Onde=regiao))
+    d = pd.concat(partes)
+    d[col] = d[col].astype(str)
+    if d.empty:
+        st.info(f"Sem amostra mínima ({MIN_N} respondentes) para este recorte.")
+        return
+    kw = dict(
+        x=col,
+        y="mediana",
+        color="Onde",
+        custom_data=["n"],
+        category_orders={col: ordem},
+        color_discrete_sequence=PAR,
+        labels={"mediana": "Mediana (R$/mês)", col: ""},
+    )
+    fig = px.line(d, markers=True, **kw) if linha else px.bar(d, barmode="group", **kw)
+    fig.update_traces(hovertemplate="%{x}<br>Mediana: R$ %{y:,.0f}<br>n = %{customdata[0]}<extra></extra>")
+    if linha:
+        fig.update_traces(line=dict(width=4), marker=dict(size=10))
+    mostrar(fig, titulo)
+    if regiao in motor.REGIOES and rg.empty:
+        st.caption(f"Sem amostra mínima ({MIN_N}) em {regiao} neste recorte.")
+
+
+def _quebra(texto, n=13):
+    linhas, atual = [], ""
+    for p in texto.split():
+        if atual and len(atual) + 1 + len(p) > n:
+            linhas.append(atual)
+            atual = p
+        else:
+            atual = f"{atual} {p}".strip()
+    linhas.append(atual)
+    return "<br>".join(linhas)
+
+
+def radar(dg, cargo):
+    eixos = list(dg["eixo"]) + [dg["eixo"].iloc[0]]
+    rotulos = [_quebra(e) for e in eixos]
+
+    def serie(col, nome, cor, dash, width, fill=None):
+        v = list(dg[col]) + [dg[col].iloc[0]]
+        return go.Scatterpolar(
+            r=v,
+            theta=rotulos,
+            customdata=eixos,
+            name=nome,
+            mode="lines+markers",
+            fill="toself" if fill else None,
+            fillcolor=fill,
+            line=dict(color=cor, width=width, dash=dash),
+            marker=dict(size=6),
+            hovertemplate="%{customdata}<br>" + nome + ": %{r:.0f}%<extra></extra>",
+        )
+
+    fig = go.Figure([
+        serie("comunidade", "Média da pesquisa", "#E5E7EB", "dash", 2),
+        serie("alvo", "Perfil típico da profissão", AMBAR, "dot", 3),
+        serie("voce", "Você", TEAL, "solid", 4, fill="rgba(53,208,186,.2)"),
+    ])
+    fig = estilizar(fig)
+    fig.update_layout(
+        margin=dict(l=58, r=58, t=28, b=56),
+        height=460,
+        legend=dict(orientation="h", y=-0.1, x=0.5, xanchor="center", yanchor="top"),
+        polar=dict(
+            bgcolor="rgba(0,0,0,0)",
+            radialaxis=dict(
+                range=[0, 100],
+                tickvals=[25, 50, 75, 100],
+                ticksuffix="%",
+                angle=90,
+                gridcolor="rgba(255,255,255,.14)",
+                linecolor="rgba(255,255,255,.14)",
+                tickfont=dict(size=10, color="#AEB8E6"),
+            ),
+            angularaxis=dict(
+                gridcolor="rgba(255,255,255,.14)",
+                linecolor="rgba(255,255,255,.14)",
+                tickfont=dict(size=11, color="#CBD3EA"),
+            ),
+        ),
+    )
+    return fig
+
+
+def lacunas_html(dg):
+    d = dg.assign(lacuna=dg["alvo"] - dg["voce"]).sort_values("lacuna", ascending=False)
+    falta = d[d["lacuna"] > 1]
+    partes = []
+    for r in falta.itertuples():
+        partes.append(
+            f'<div class="gap" style="--t:hsla({MATIZ_EIXO.get(r.eixo, 220)},40%,50%,.08);--b:hsla({MATIZ_EIXO.get(r.eixo, 220)},45%,64%,.30)">'
+            f'<div class="t"><b>{_html.escape(r.eixo)}</b>'
+            f'<span><span class="v">Você {r.voce:.0f}%</span><span class="a">Alvo {r.alvo:.0f}%</span></span></div>'
+            f'<div class="bar"><i style="width:{min(r.voce, 100):.0f}%"></i><u style="left:{min(r.alvo, 100):.0f}%"></u></div>'
+            f'<p>{_html.escape(r.falta)}</p></div>'
+        )
+    fortes = d[d["lacuna"] <= 1]["eixo"].tolist()
+    return "".join(partes), fortes
+
+
+def _estilo_cargo(cargo):
+    h = MATIZ_CARGO.get(cargo, 220)
+    return (
+        f"--c:{hexhsl(h, 60, 66)};--c2:{hexhsl(h, 50, 40)};"
+        f"--t:hsla({h:.0f},45%,55%,.08);--b:hsla({h:.0f},50%,64%,.30)"
+    )
+
+
+def cartoes_ranking(top, salarios):
+    maximo = max(float(top.adequacao.max()), 1e-9)
+    itens = []
+    for pos, r in enumerate(top.itertuples(), start=1):
+        sal = salarios.get(r.cargo)
+        sal_txt = f"Mediana de {moeda(sal)}/mês" if sal == sal and sal else "Sem dado salarial"
+        n_txt = f"{r.n_total} respondentes" + (" (amostra pequena, leia com cautela)" if r.amostra_reduzida else "")
+        itens.append(
+            f'<div class="rk{" topo" if pos == 1 else ""}" style="{_estilo_cargo(r.cargo)}">'
+            f'<div class="pos">{pos}</div>'
+            f'<div class="corpo"><div class="nome">{_html.escape(r.cargo)}</div>'
+            f'<div class="meta">{_html.escape(r.grupo)}</div>'
+            f'<div class="barra"><i style="width:{r.adequacao / maximo * 100:.0f}%"></i></div></div>'
+            f'<div class="fim"><div class="pct">{r.adequacao:.0%}</div>'
+            f'<div class="sal">{sal_txt}</div><div class="sal">{n_txt}</div></div></div>'
+        )
+    return '<div class="rk-lista">' + "".join(itens) + "</div>"
+
+
+def perfil_html(perfil):
+    matiz = {h: MATIZ_CAT.get(cat, 200) for cat, hs in base.categorias.items() for h in hs}
+    marcadas = set(perfil["habilidades"])
+    ordenadas = [h for hs in base.categorias.values() for h in sorted(hs, key=_chave_alfa) if h in marcadas]
+    fatos = [("Experiência", perfil["experiencia"]), ("Nível", perfil["nivel"]),
+             ("Região", perfil["regiao"]), ("Interesse", perfil["interesse"])]
+    fatos_html = "".join(f"<div><span>{_html.escape(k)}</span><b>{_html.escape(str(v))}</b></div>" for k, v in fatos)
+    bloco = ""
+    if ordenadas:
+        tags = "".join(
+            f'<i style="background:hsla({matiz[h]},55%,58%,.14);border-color:hsla({matiz[h]},60%,62%,.45)">{_html.escape(h)}</i>'
+            for h in ordenadas
+        )
+        bloco = f'<div class="perfil-rotulo">Tecnologias e práticas ({len(ordenadas)})</div><div class="perfil-tags">{tags}</div>'
+    return f'<div class="perfil"><div class="perfil-fatos">{fatos_html}</div>{bloco}</div>'
+
+
+def resultado(perfil):
+    ss = st.session_state
+    rk = motor.ranking(
+        base,
+        perfil["habilidades"],
+        interesse=perfil["interesse"],
+        experiencia=perfil["experiencia"],
+        nivel=perfil["nivel"],
+    )
+    reg = perfil["regiao"]
+    st.subheader("Seu perfil")
+    st.markdown(perfil_html(perfil), unsafe_allow_html=True)
+    if not perfil["habilidades"]:
+        st.warning("Sem habilidades informadas, o ranking usa interesse, experiência e nível. Refaça para um resultado mais completo.")
+    if rk.empty:
+        st.error("Sem amostra suficiente para recomendar.")
+        return
+
+    top = motor.principais(rk, perfil["interesse"], perfil["nivel"], k=TOP_AREAS)
+    salarios = motor.panorama_todas_profissoes(base).set_index("cargo")["mediana_brasil"].to_dict()
+
+    st.subheader(
+        f"As {len(top)} áreas que mais combinam com você",
+        help="A barra compara as áreas entre si. Nas profissões técnicas, a afinidade pondera tecnologias, práticas e "
+        "interesse; nos cargos de gestão e liderança (que não respondem ao bloco técnico da pesquisa), considera "
+        "interesse, senioridade e experiência.",
+    )
+    st.markdown(cartoes_ranking(top, salarios), unsafe_allow_html=True)
+    outras = rk[~rk.cargo.isin(top.cargo)]
+    with st.expander(f"Ver as outras {len(outras)} profissões da pesquisa"):
+        st.dataframe(
+            outras.assign(Afinidade=(outras.adequacao * 100).round().astype(int).astype(str) + "%")[["cargo", "grupo", "Afinidade", "n_total"]]
+            .rename(columns={"cargo": "Profissão", "grupo": "Grupo", "n_total": "Respondentes"}),
+            hide_index=True,
+            width="stretch",
+        )
+
+    st.subheader(
+        "Diagnóstico: onde você está e onde quer chegar",
+        help="Em cada eixo técnico, 100% é dominar todo o conjunto de tecnologias típico da profissão. "
+        "A linha verde é você, a pontilhada âmbar é o perfil típico da profissão escolhida e a tracejada "
+        "cinza é a média da pesquisa.",
+    )
+    mais = st.toggle("Incluir as outras profissões na lista", key="cargo_mais")
+    opcoes = list(top.cargo) + ([c for c in rk.cargo if c not in set(top.cargo)] if mais else [])
+    if st.session_state.get("cargo_sel") not in opcoes:
+        st.session_state["cargo_sel"] = opcoes[0]
+    cargo = st.selectbox(
+        "Profissão que você quer explorar",
+        opcoes,
+        key="cargo_sel",
+        help="Começa pela área com mais afinidade. Ative a opção acima para comparar com qualquer uma das profissões da base.",
+    )
+    if cargo in motor.CARGOS_GESTAO:
+        st.info(
+            f"**{cargo}** é um cargo de gestão/liderança: na pesquisa State of Data, gestores respondem ao bloco de "
+            "liderança e não preenchem o bloco técnico de ferramentas (4.b–4.j). Abaixo você vê os comparativos de experiência e salário."
+        )
+    elif base.n_total.get(cargo, 0) < MIN_N:
+        st.warning(f"A amostra de **{cargo}** na base tem menos de {MIN_N} respondentes (n={base.n_total.get(cargo, 0)}): interprete os recortes com cautela.")
+
+    dg = motor.diagnostico(base, perfil, cargo)
+    gr, gl = st.columns([3, 2], gap="large")
+    with gr:
+        titulo_grafico(f"Você x {cargo}")
+        st.plotly_chart(radar(dg, cargo), width="stretch", config=CFG)
+    with gl:
+        st.markdown("##### Todas as lacunas identificadas")
+        html_lac, fortes = lacunas_html(dg)
+        if html_lac:
+            st.markdown(html_lac, unsafe_allow_html=True)
+        else:
+            st.success("Você já está no nível do perfil típico desta profissão nos eixos avaliados.")
+        if fortes and html_lac:
+            st.markdown(
+                '<div class="ok"><b>Já no nível da profissão:</b> ' + _html.escape(", ".join(fortes)) + ".</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.subheader("Análise personalizada")
+    sm = motor.sumario(base, perfil, top)
+    chave = json.dumps(perfil, sort_keys=True)
+    if ss.get("analise_chave") != chave:
+        with st.spinner("Preparando a análise das suas áreas…"):
+            ss.analise = ia.explicar(sm) if ia.disponivel() else ia.explicar_local(sm)
+        ss.analise_chave = chave
+    with st.container(key="analise"):
+        st.markdown(ss.analise.replace("$", "\\$"))  # sem isso, dois "R$" na mesma frase viram fórmula (texto verde)
+
+    st.subheader("Explore a profissão escolhida")
+    t = motor.tabelas_cargo(base, cargo, reg)
+    g1, g2 = st.columns(2)
+    with g1:
+        hab = motor.habilidades_cargo(base, cargo, perfil["habilidades"])
+        if hab.empty:
+            st.info("Sem dados técnicos do bloco 4 para este cargo de gestão.")
+        else:
+            hab["Situação"] = hab["tem"].map({True: "Você já usa", False: "Para desenvolver"})
+            fig = px.bar(
+                hab.sort_values("pct"),
+                x="pct",
+                y="habilidade",
+                orientation="h",
+                color="Situação",
+                color_discrete_map={"Você já usa": TEAL, "Para desenvolver": AMBAR},
+                category_orders={"Situação": ["Você já usa", "Para desenvolver"]},
+                labels={"pct": "% dos profissionais do cargo que usam", "habilidade": ""},
+            )
+            fig.update_xaxes(tickformat=".0%")
+            fig.update_layout(height=max(420, len(hab) * 24))
+            mostrar(fig, f"Tecnologias e práticas usadas em: {cargo}")
+    with g2:
+        comparativo(t["nivel_br"], t["nivel_reg"], "senioridade", ORDEM_NIVEL, "Salário mediano por senioridade", reg)
+    g3, g4 = st.columns(2)
+    with g3:
+        comparativo(
+            t["exp_br"], t["exp_reg"], "experiencia", ORDEM_EXP, "Salário mediano por tempo de experiência", reg, linha=True
+        )
+    with g4:
+        r = t["regioes"]
+        if r.empty:
+            st.info(f"Sem amostra mínima ({MIN_N}) por região para este cargo.")
+        else:
+            fig = px.bar(
+                r,
+                x="regiao",
+                y="mediana",
+                color="mediana",
+                color_continuous_scale=ESCALA,
+                custom_data=["n", "media"],
+                labels={"mediana": "Mediana (R$/mês)", "regiao": ""},
+            )
+            fig.update_traces(
+                hovertemplate="%{x}<br>Mediana: R$ %{y:,.0f}<br>Média: R$ %{customdata[1]:,.0f}"
+                "<br>n = %{customdata[0]}<extra></extra>"
+            )
+            mostrar(fig, "Salário por macrorregião")
+    with st.expander("Ver valores (mediana e quartis) por senioridade"):
+        x = t["nivel_br"].rename(
+            columns={
+                "senioridade": "Senioridade",
+                "n": "Respondentes",
+                "mediana": "Mediana",
+                "media": "Média",
+                "p25": "25%",
+                "p75": "75%",
+            }
+        )
+        st.dataframe(x.style.format({c: moeda for c in ["Mediana", "Média", "25%", "75%"]}), hide_index=True)
+
+
+st.markdown(f"<style>{css_botoes(base)}</style>", unsafe_allow_html=True)
+
+with sec1:
+    n_resp = f"{len(base.df):,}".replace(",", ".")
+    if st.session_state.get("perfil") is not None:
+        instrucao = ""
+    elif ia.disponivel():
+        instrucao = ("Conte, na conversa ou no formulário, com quais tecnologias você tem mais domínio ou familiaridade "
+                     "e descubra as áreas em que mais se encaixa e quanto o mercado paga. ")
+    else:
+        instrucao = ("Selecione abaixo as tecnologias com as quais você tem mais domínio ou familiaridade e descubra "
+                     "as áreas em que mais se encaixa e quanto o mercado paga. ")
+    if st.session_state.get("perfil") is not None:
+        instrucao = "Veja abaixo as áreas que mais combinam com o seu perfil e o que o mercado paga em cada uma."
+    elif ia.disponivel():
+        instrucao = "Conte, na conversa ou no formulário, o que você domina e descubra as áreas em que mais se encaixa."
+    else:
+        instrucao = "Marque as tecnologias que você domina e descubra as áreas em que mais se encaixa e quanto o mercado paga."
+    st.markdown(
+        '<div class="abertura"><div class="eyebrow"><i></i>Com base no State of Data Brasil 2025-2026</div>'
+        '<h1 class="titulo">Quanto vale uma <span class="acento">carreira tech</span>?</h1>'
+        f'<p class="hero-sub">{instrucao}</p>'
+        f'<div class="stats"><div><b>{n_resp}</b><span>respostas de profissionais</span></div>'
+        f'<div><b>{len(base.todas_profissoes)}</b><span>profissões</span></div>'
+        f'<div><b>{len(base.habilidades)}</b><span>tecnologias e práticas</span></div></div></div>',
+        unsafe_allow_html=True,
+    )
+    ss = st.session_state
+    ss.setdefault("perfil", None)
+    if ss.perfil is None:
+        if ia.disponivel():
+            modo = st.radio("Como prefere responder?", ["Entrevista com IA", "Formulário rápido"], horizontal=True)
+        else:
+            modo = "Formulário rápido"  # sem chave da API, o formulário é a única opção (sem aviso para o usuário)
+        if modo == "Entrevista com IA":
+            chat()
+        else:
+            formulario()
+    else:
+        if st.button("Refazer entrevista"):
+            for k in ("perfil", "msgs", "analise", "analise_chave", "cargo_sel", "cargo_mais"):
+                ss.pop(k, None)
+            ss.rolar = "topo"
+            st.rerun()
+        with st.container(key="resultado"):
+            resultado(ss.perfil)
+
+    alvo_rolagem = ss.pop("rolar", None)
+    if alvo_rolagem:
+        rolar_para(".st-key-resultado" if alvo_rolagem == "resultado" else ".st-key-secao_1")
+
+
+# ----------------------------------------------------------------------
+# SEÇÃO 2 — Painel geral
+# ----------------------------------------------------------------------
+
+def limpar_filtros():
+    for _, coluna, ordem, _ in FILTROS:
+        for j in range(len(opcoes_filtro(coluna, ordem))):
+            st.session_state[f"flt_{coluna}_{j}"] = []
+
+
+def filtro(col_ui, rotulo, coluna, ordem=None, rotulos=None):
+    opcoes = opcoes_filtro(coluna, ordem)
+    col_ui.markdown(f'<div class="grupo">{_html.escape(rotulo)}</div>', unsafe_allow_html=True)
+    with col_ui.container(key=f"grupo_flt_{coluna}"):
+        sel = botoes(f"flt_{coluna}", opcoes, rotulos)
+    return sel if sel else opcoes
+
+
+with sec2:
+    st.markdown(
+        '<h2 class="secao">Painel geral</h2>'
+        '<p class="secao-sub">Salário informado em faixas mensais; os valores usam o ponto médio de cada faixa. '
+        "Sem seleção nos filtros, todos os valores são considerados.</p>",
+        unsafe_allow_html=True,
+    )
+
+    with st.container(border=True, key="painel_filtros"):
+        topo, limpar = st.columns([5, 1], vertical_alignment="center")
+        topo.markdown("**Filtros**")
+        limpar.button("Limpar filtros", on_click=limpar_filtros, width="stretch")
+        c_esq, c_dir = st.columns(2, gap="large")
+        sel = {}
+        for i, (rotulo, coluna, ordem, rotulos) in enumerate(FILTROS):
+            sel[coluna] = filtro(c_esq if i < 2 else c_dir, rotulo, coluna, ordem, rotulos)
+
+    d = base.df[
+        base.df.regiao.isin(sel["regiao"])
+        & base.df.senioridade.isin(sel["senioridade"])
+        & base.df.contrato.isin(sel["contrato"])
+        & base.df.tamanho_empresa.isin(sel["tamanho_empresa"])
+    ]
+
+    k1, k2, k3, k4 = st.columns(4)
+    if d.empty:
+        st.warning("Nenhum dado para os filtros selecionados.")
+    elif len(d) < MIN_N:
+        st.warning(f"Menos de {MIN_N} respondentes com esses filtros; amplie a seleção.")
+    else:
+        with k1.container(key="kpi_1"):
+            st.metric("Dados analisados", f"{len(d):,}".replace(",", "."), help=f"{len(d) / len(base.df):.1%} da base no escopo.")
+        with k2.container(key="kpi_2"):
+            st.metric("Salário médio", moeda(d.salario.mean()))
+        with k3.container(key="kpi_3"):
+            st.metric("Salário mediano", moeda(d.salario.median()))
+        with k4.container(key="kpi_4"):
+            st.metric("Profissão mais frequente", d.cargo.mode()[0])
+
+        a, b = st.columns(2)
+        with a:
+            pc = motor.resumo(d, "cargo").sort_values("media")
+            fig = px.bar(
+                pc,
+                x="media",
+                y="cargo",
+                orientation="h",
+                color="cargo",
+                color_discrete_map=COR_CARGO,
+                custom_data=["n"],
+                labels={"media": "Salário médio (R$/mês)", "cargo": ""},
+            )
+            fig.update_traces(hovertemplate="%{y}<br>Média: R$ %{x:,.0f}<br>n = %{customdata[0]}<extra></extra>")
+            fig.update_layout(height=max(420, len(pc) * 30), showlegend=False)
+            mostrar(fig, f"Salário médio por profissão (mín. {MIN_N} respondentes)")
+        with b:
+            fx = d.faixa_salarial.value_counts().reindex(motor.ORDEM_FAIXAS, fill_value=0).reset_index()
+            fx.columns = ["faixa", "quantidade"]
+            fx["faixa"] = fx.faixa.map(_faixa_curta)
+            fig = px.bar(
+                fx,
+                x="faixa",
+                y="quantidade",
+                color="faixa",
+                color_discrete_sequence=rampa(len(fx)),
+                labels={"faixa": "Faixa salarial (R$/mês)", "quantidade": "Respondentes"},
+            )
+            fig.update_xaxes(tickangle=-45, tickfont=dict(size=11))
+            fig.update_layout(showlegend=False)
+            mostrar(fig, "Distribuição por faixa salarial (R$ por mês)")
+
+        with st.expander(f"Ver tabela completa de todas as {len(base.todas_profissoes)} profissões (incluindo n < {MIN_N})"):
+            pan = motor.panorama_todas_profissoes(base)
+            pan_exib = pan[["cargo", "grupo", "n_brasil", "mediana_brasil", "media_brasil", "p25_brasil", "p75_brasil"]].rename(
+                columns={
+                    "cargo": "Profissão",
+                    "grupo": "Grupo",
+                    "n_brasil": "n",
+                    "mediana_brasil": "Mediana",
+                    "media_brasil": "Média",
+                    "p25_brasil": "25%",
+                    "p75_brasil": "75%",
+                }
+            )
+            st.dataframe(
+                pan_exib.style.format({c: moeda for c in ["Mediana", "Média", "25%", "75%"]}),
+                hide_index=True,
+                width="stretch",
+            )
+
+        c, e = st.columns(2)
+        with c:
+            mt = d.modelo_trabalho.value_counts().reset_index()
+            mt.columns = ["modelo", "quantidade"]
+            fig = px.pie(mt, names="modelo", values="quantidade", hole=0.55, color_discrete_sequence=CORES_CAT)
+            fig.update_traces(
+                textinfo="percent",
+                textfont=dict(color=BG, size=14),
+                marker=dict(line=dict(color=BG, width=2)),
+            )
+            fig = estilizar(fig)
+            fig.update_layout(legend=dict(orientation="h", y=-0.05, yanchor="top", x=0), margin=dict(b=50))
+            titulo_grafico("Proporção por modelo de trabalho")
+            st.plotly_chart(fig, width="stretch", config=CFG)
+        with e:
+            try:
+                gj = get_geojson()
+                pr = motor.resumo(d, "regiao").set_index("regiao")
+                ufs = [u for u in UF_REGIAO if UF_REGIAO[u] in pr.index]
+                fig = go.Figure(
+                    go.Choropleth(
+                        geojson=gj,
+                        locations=list(UF_REGIAO),
+                        z=[0] * len(UF_REGIAO),
+                        featureidkey="properties.sigla",
+                        showscale=False,
+                        hoverinfo="skip",
+                        colorscale=[[0, "#252C46"], [1, "#252C46"]],
+                        marker_line_color=BG,
+                        marker_line_width=0.8,
+                    )
+                )
+                if ufs:
+                    fig.add_trace(
+                        go.Choropleth(
+                            geojson=gj,
+                            locations=ufs,
+                            featureidkey="properties.sigla",
+                            colorscale=ESCALA,
+                            z=[pr.loc[UF_REGIAO[u], "media"] for u in ufs],
+                            text=[UF_REGIAO[u] for u in ufs],
+                            customdata=[[int(pr.loc[UF_REGIAO[u], "n"])] for u in ufs],
+                            hovertemplate="<b>%{text}</b><br>Média: R$ %{z:,.0f}<br>n = %{customdata[0]}<extra></extra>",
+                            marker_line_color=BG,
+                            marker_line_width=0.8,
+                            colorbar=dict(
+                                title=dict(text="R$/mês"), orientation="h", thickness=10, len=0.8, y=-0.02, yanchor="top"
+                            ),
+                        )
+                    )
+                fig.update_geos(fitbounds="geojson", visible=False, bgcolor="rgba(0,0,0,0)")
+                fig = estilizar(fig)
+                fig.update_layout(height=420, margin=dict(b=56))
+                titulo_grafico("Salário médio por macrorregião")
+                st.plotly_chart(fig, width="stretch", config=CFG)
+                st.caption(
+                    "Cada estado mostra a média da sua macrorregião (não há dado por estado). "
+                    f"Cinza: região com menos de {MIN_N} respondentes."
+                )
+            except Exception:
+                st.info("Não foi possível carregar o mapa (GeoJSON indisponível).")
+
+        h, i = st.columns(2)
+        with h:
+            pn = motor.resumo(d, "senioridade").pipe(motor._ordenar, "senioridade", ORDEM_NIVEL)
+            fig = px.bar(
+                pn,
+                x="senioridade",
+                y="media",
+                color="senioridade",
+                color_discrete_map=COR_NIVEL,
+                labels={"senioridade": "", "media": "Salário médio (R$/mês)"},
+            )
+            fig.update_layout(showlegend=False)
+            mostrar(fig, "Salário médio por senioridade")
+        with i:
+            pe = motor.resumo(d, "experiencia").pipe(motor._ordenar, "experiencia", ORDEM_EXP)
+            fig = px.line(
+                pe,
+                x="experiencia",
+                y="media",
+                markers=True,
+                labels={"experiencia": "Experiência em dados", "media": "Salário médio (R$/mês)"},
+            )
+            fig.update_traces(line=dict(color=TEAL, width=4), marker=dict(size=11, color=AMBAR))
+            mostrar(fig, "Salário médio por tempo de experiência")
+
+    st.caption("Por privacidade (LGPD), a tabela de microdados não é exibida: apenas resultados agregados.")
+
+
+# ----------------------------------------------------------------------
+# SEÇÃO 3 — Hipóteses do pré-projeto (análise exploratória)
+# ----------------------------------------------------------------------
+with sec3:
+    df = base.df
+    st.markdown(
+        '<h2 class="secao">Hipóteses do projeto</h2>'
+        '<p class="secao-sub">Análise exploratória sobre o escopo do projeto abrangendo todas as profissões. '
+        "Não substitui a regressão ordinal prevista no cronograma.</p>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("#### H1. A senioridade explica mais diferença salarial do que a região?")
+    e2 = pd.DataFrame({
+        "Fator": ["Senioridade", "Profissão", "Experiência em dados", "Região", "Porte da empresa"],
+        "pct": [motor.eta2(df, c) for c in ["senioridade", "cargo", "experiencia", "regiao", "tamanho_empresa"]],
+    })
+    fig = px.bar(
+        e2.sort_values("pct"),
+        x="pct",
+        y="Fator",
+        orientation="h",
+        color="pct",
+        color_continuous_scale=ESCALA,
+        labels={"pct": "% da variação salarial explicada (η²)", "Fator": ""},
+    )
+    fig.update_xaxes(tickformat=".0%")
+    mostrar(fig, "Variância salarial explicada por fator (η²)")
+
+    st.markdown("#### H2. Como os salários se distribuem entre os grupos de profissões e senioridade?")
+    hg = motor.resumo(df, ["grupo", "senioridade"], min_n=MIN_N)
+    if not hg.empty:
+        fig = px.bar(
+            hg,
+            x="senioridade",
+            y="mediana",
+            color="grupo",
+            barmode="group",
+            category_orders={"senioridade": ORDEM_NIVEL},
+            color_discrete_map=GRUPO_COR,
+            custom_data=["n", "grupo"],
+            labels={"mediana": "Mediana salarial (R$/mês)", "senioridade": ""},
+        )
+        fig.update_traces(
+            hovertemplate="%{customdata[1]} — %{x}<br>Mediana: R$ %{y:,.0f}<br>n = %{customdata[0]}<extra></extra>"
+        )
+        mostrar(fig, "Salário mediano por grupo de profissões e senioridade")
+
+    st.markdown("#### H3. Tecnologias mais adotadas em todo o banco de dados")
+    freq_df = base.freq_geral.reset_index()
+    freq_df.columns = ["tecnologia", "pct_uso"]
+    freq_df["categoria"] = freq_df["tecnologia"].map(
+        {h: cat for cat, hs in base.categorias.items() for h in hs}
+    )
+    top_tec = freq_df.sort_values("pct_uso", ascending=False).head(20).sort_values("pct_uso")
+    fig = px.bar(
+        top_tec,
+        x="pct_uso",
+        y="tecnologia",
+        color="categoria",
+        orientation="h",
+        color_discrete_map={c: hexhsl(h, 58, 64) for c, h in MATIZ_CAT.items()},
+        labels={"pct_uso": "% dos respondentes técnicos que utilizam", "tecnologia": ""},
+    )
+    fig.update_xaxes(tickformat=".0%")
+    fig.update_layout(height=max(460, len(top_tec) * 24))
+    mostrar(fig, "Top 20 tecnologias e práticas mais usadas na base")
+
+    with st.expander("Ver todas as tecnologias e práticas carregadas da base"):
+        st.dataframe(
+            freq_df.sort_values("pct_uso", ascending=False).assign(
+                pct_formatado=lambda x: (x["pct_uso"] * 100).map("{:.1f}%".format)
+            )[["categoria", "tecnologia", "pct_formatado"]].rename(
+                columns={"categoria": "Categoria", "tecnologia": "Tecnologia / Prática", "pct_formatado": "Adesão"}
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+
