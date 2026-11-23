@@ -123,13 +123,13 @@ def validar_perfil(p, base):
 _SISTEMA_ANALISE = f"""Você é um orientador de carreira do app "{NOME_PROJETO}". Recebe um JSON com o perfil da pessoa (habilidades, experiência, nível, região, interesse) e os números JÁ CALCULADOS para as áreas da pesquisa State of Data Brasil 2025-2026 que mais combinam com esse perfil (campo `areas`, já ordenado; `total_profissoes_na_pesquisa` é só o tamanho do universo).
 
 Escreva em português do Brasil, em markdown, de 350 a 500 palavras, como alguém conversando com a pessoa: frases claras, sem jargão desnecessário e sem emojis. Cubra:
-1. **Suas áreas mais aderentes:** apresente as áreas do JSON na ordem, com o % de afinidade e o `n_total`, e explique em uma ou duas frases por área como tecnologias, senioridade, experiência e interesse pesaram.
+1. **Suas áreas mais aderentes:** apresente as áreas do JSON na ordem, com o % de afinidade e o número de respondentes (`respondentes_total`), e explique em uma ou duas frases por área como tecnologias, senioridade, experiência e interesse pesaram.
 2. **Caminhos possíveis:** qual dessas áreas é o passo mais natural a partir de hoje e qual exigiria mais mudança.
-3. **Remuneração:** compare os salários medianos (geral Brasil, por senioridade e na região da pessoa quando houver amostra mínima n >= 20), sempre citando o `n`.
+3. **Remuneração:** compare os salários médios (geral Brasil, por senioridade e na região da pessoa quando houver pelo menos 20 respondentes), sempre citando quantos respondentes há em cada valor.
 4. **O que falta aprender:** as tecnologias mais usadas nas duas ou três áreas de maior afinidade que a pessoa ainda não domina (com o % de uso).
-5. **Nota metodológica breve:** faixas salariais, amostra voluntária, ausência de dado por cidade e menor precisão quando `amostra_reduzida: true` (n < 20).
+5. **Nota metodológica breve:** faixas salariais, participação voluntária, ausência de dado por cidade e menor confiança quando `poucos_respondentes: true` (menos de 20 respondentes).
 
-Regras: use SOMENTE os números do JSON; não invente valores; não cite profissões que não estejam no JSON; trate o salário como referência, não promessa; tom encorajador e honesto; não use gênero, raça ou idade."""
+Regras: escreva para quem está começando na área, com palavras simples e sem siglas sem explicação; diga sempre "respondentes" (nunca "n=") e sempre "média" (nunca "mediana"); use SOMENTE os números do JSON; não invente valores; não cite profissões que não estejam no JSON; trate o salário como referência, não promessa; tom encorajador e honesto; não use gênero, raça ou idade."""
 
 
 def explicar(sumario) -> str:
@@ -151,7 +151,7 @@ def explicar_local(s) -> str:
     top1 = s["areas"][0]
     linhas = [
         f"A profissão com maior afinidade com o seu perfil é **{top1['cargo']}** "
-        f"(afinidade: {top1['adequacao_pct']}%, n={top1['n_total']})."
+        f"(afinidade: {top1['adequacao_pct']}%, {top1['respondentes_total']} respondentes)."
     ]
 
     if top1["habilidades_que_voce_tem"]:
@@ -170,20 +170,20 @@ def explicar_local(s) -> str:
             + "."
         )
 
-    sal = top1["salario_mediano_por_senioridade_brasil"]
+    sal = top1["salario_medio_por_senioridade_brasil"]
     if sal:
         linhas.append(
-            f"**Salário mediano em {top1['cargo']} (Brasil):** "
-            + "; ".join(f"{k}: R$ {v['mediana']:,}".replace(",", ".") + f" (n={v['n']})" for k, v in sal.items())
+            f"**Salário médio em {top1['cargo']} (Brasil):** "
+            + "; ".join(f"{k}: R$ {v['media']:,}".replace(",", ".") + f" ({v['respondentes']} respondentes)" for k, v in sal.items())
             + "."
         )
 
     linhas.append(f"### Suas {len(s['areas'])} áreas com mais afinidade")
     itens = []
     for pos, x in enumerate(s["areas"], start=1):
-        med = f"R$ {x['salario_mediano_geral_brasil']:,}".replace(",", ".") if x["salario_mediano_geral_brasil"] else "sem dado"
-        aviso = " (amostra pequena, leia com cautela)" if x["amostra_reduzida"] else ""
-        itens.append(f"{pos}. **{x['cargo']}**: afinidade de {x['adequacao_pct']}%, mediana de {med}, {x['n_total']} respondentes{aviso}")
+        med = f"R$ {x['salario_medio_geral_brasil']:,}".replace(",", ".") if x["salario_medio_geral_brasil"] else "sem dado"
+        aviso = " (poucos respondentes, leia com cautela)" if x["poucos_respondentes"] else ""
+        itens.append(f"{pos}. **{x['cargo']}**: afinidade de {x['adequacao_pct']}%, média de {med}, {x['respondentes_total']} respondentes{aviso}")
     linhas.append("\n".join(itens))
 
     return "\n\n".join(linhas)

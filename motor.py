@@ -259,12 +259,12 @@ def panorama_todas_profissoes(base: Base, regiao=None) -> pd.DataFrame:
     geral["amostra_reduzida"] = geral["n_brasil"] < MIN_N
     if regiao in REGIOES:
         dr = df[df["regiao"] == regiao]
-        reg = resumo(dr, "cargo", min_n=1)[["cargo", "n", "mediana"]].rename(columns={"n": "n_regiao", "mediana": "mediana_regiao"})
+        reg = resumo(dr, "cargo", min_n=1)[["cargo", "n", "media"]].rename(columns={"n": "n_regiao", "media": "media_regiao"})
         geral = geral.merge(reg, on="cargo", how="left")
     else:
         geral["n_regiao"] = 0
-        geral["mediana_regiao"] = None
-    return geral.sort_values("mediana_brasil", ascending=False).reset_index(drop=True)
+        geral["media_regiao"] = None
+    return geral.sort_values("media_brasil", ascending=False).reset_index(drop=True)
 
 def tabelas_cargo(base: Base, cargo, regiao=None, min_n=MIN_N) -> dict:
     d = base.df[base.df["cargo"] == cargo]
@@ -286,21 +286,21 @@ def eta2(df, col) -> float:
 def sumario(base: Base, perfil: dict, rk: pd.DataFrame) -> dict:
     # rk já deve vir recortado nas áreas priorizadas (ver principais)
     def tab(t):
-        return {str(r[t.columns[0]]): {"mediana": int(r.mediana), "n": int(r.n)} for _, r in t.iterrows()}
+        return {str(r[t.columns[0]]): {"media": int(r.media), "respondentes": int(r.n)} for _, r in t.iterrows()}
     areas = []
     for _, r in rk.iterrows():
         t = tabelas_cargo(base, r.cargo, perfil.get("regiao"), min_n=MIN_N)
         hab = habilidades_cargo(base, r.cargo, perfil["habilidades"], top=10)
-        med_geral = int(t["geral_br"]["mediana"].iloc[0]) if not t["geral_br"].empty else None
+        media_geral = int(t["geral_br"]["media"].iloc[0]) if not t["geral_br"].empty else None
         areas.append({
             "cargo": r.cargo, "grupo": r.grupo, "adequacao_pct": round(r.adequacao * 100),
-            "n_total": int(r.n_total), "amostra_reduzida": bool(r.amostra_reduzida),
-            "salario_mediano_geral_brasil": med_geral,
+            "respondentes_total": int(r.n_total), "poucos_respondentes": bool(r.amostra_reduzida),
+            "salario_medio_geral_brasil": media_geral,
             "habilidades_que_voce_tem": [{"habilidade": h.habilidade, "pct_profissionais": round(h.pct * 100)} for h in hab.itertuples() if h.tem],
             "habilidades_a_desenvolver": [{"habilidade": h.habilidade, "pct_profissionais": round(h.pct * 100)} for h in hab.itertuples() if not h.tem][:6],
-            "salario_mediano_por_senioridade_brasil": tab(t["nivel_br"]),
-            "salario_mediano_por_senioridade_na_sua_regiao": tab(t["nivel_reg"]),
-            "salario_mediano_por_experiencia_brasil": tab(t["exp_br"]),
+            "salario_medio_por_senioridade_brasil": tab(t["nivel_br"]),
+            "salario_medio_por_senioridade_na_sua_regiao": tab(t["nivel_reg"]),
+            "salario_medio_por_experiencia_brasil": tab(t["exp_br"]),
         })
     return {
         "perfil": perfil, "total_profissoes_na_pesquisa": len(base.todas_profissoes),
@@ -309,7 +309,7 @@ def sumario(base: Base, perfil: dict, rk: pd.DataFrame) -> dict:
             "salário informado em faixas (usamos o ponto médio)",
             "amostra voluntária, concentrada no Sudeste",
             "dados de fim de 2025 / início de 2026",
-            f"recortes cruzados exibidos apenas quando n >= {MIN_N}; profissões com n < {MIN_N} aparecem com mediana geral sinalizada",
+            f"recortes cruzados exibidos apenas quando há pelo menos {MIN_N} respondentes; profissões com menos de {MIN_N} respondentes aparecem com a média geral sinalizada",
             "cargos de gestão não respondem ao bloco de ferramentas técnicas no questionário original",
             "a pesquisa não tem cidade: só macrorregião",
         ],

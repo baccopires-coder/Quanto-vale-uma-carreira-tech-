@@ -169,11 +169,17 @@ button[data-testid="stBaseButton-primary"]:hover p, button[data-testid="stBaseBu
 
 [data-testid="stButtonGroup"] { flex-wrap: wrap !important; gap: .5rem !important; }
 [data-testid="stButtonGroup"] > div { flex-wrap: wrap !important; }
-button[data-testid^="stBaseButton-pills"], button[data-variant="pills"] { border-radius: 999px !important; white-space: nowrap; min-height: 38px;
-  font-size: .92rem; padding: 0 16px; color: #D5DCF0; background: var(--pbg, rgba(255,255,255,.04));
+button[data-testid^="stBaseButton-pills"], button[data-variant="pills"] { border-radius: 999px !important; white-space: normal !important;
+  min-height: 38px; height: auto !important; max-width: 100%; overflow: visible !important; line-height: 1.3;
+  font-size: .92rem; padding: 8px 16px !important; color: #D5DCF0; background: var(--pbg, rgba(255,255,255,.04));
   border: 1px solid var(--pbd, rgba(255,255,255,.16)) !important;
   transition: background .15s, border-color .15s, filter .15s; }
-button[data-testid^="stBaseButton-pills"]:hover, button[data-variant="pills"]:hover { filter: brightness(1.35); }
+button[data-variant="pills"] p, button[data-testid^="stBaseButton-pills"] p { white-space: normal !important; overflow: visible !important;
+  text-align: center; text-wrap: balance; margin: 0; }
+[data-testid="stButtonGroup"], [data-testid="stButtonGroup"] > div { height: auto !important; max-width: 100%; }
+@media (hover: hover) { button[data-variant="pills"]:hover, button[data-testid^="stBaseButton-pills"]:hover { filter: brightness(1.35); } }
+button[data-variant="pills"], button[data-testid^="stBaseButton-pills"] { -webkit-tap-highlight-color: transparent; }
+button[data-variant="pills"]:focus:not(:focus-visible) { outline: none; box-shadow: none; }
 button[data-variant="pills"]:is([data-testid="stBaseButton-pillsActive"], [data-selected="true"], [aria-pressed="true"], [aria-checked="true"]), button[data-testid="stBaseButton-pillsActive"] {
   background: var(--psel, __TEAL__) !important; border-color: var(--psel, __TEAL__) !important; font-weight: 600; }
 button[data-variant="pills"]:is([data-testid="stBaseButton-pillsActive"], [data-selected="true"], [aria-pressed="true"], [aria-checked="true"]) p, button[data-testid="stBaseButton-pillsActive"] p { color: __BG__ !important; }
@@ -186,7 +192,7 @@ span[data-baseweb="tag"] { background-color: __ROXO_ESCURO__ !important; }
 .pergunta { font-size: .95rem; font-weight: 500; color: #B4C0E4; margin: .9rem 0 .4rem 0; }
 [class*="st-key-grupo_"][data-testid="stVerticalBlock"], [class*="st-key-grupo_"] > [data-testid="stVerticalBlock"] {
   flex-direction: row !important; flex-wrap: wrap !important; gap: .5rem !important; }
-[class*="st-key-grupo_"] [data-testid="stElementContainer"] { width: auto !important; flex: 0 0 auto !important; }
+[class*="st-key-grupo_"] [data-testid="stElementContainer"] { width: auto !important; flex: 0 1 auto !important; max-width: 100%; }
 [class*="st-key-grupo_"] [data-testid="stButtonGroup"] { flex-wrap: nowrap !important; }
 
 .rk-lista { display: flex; flex-direction: column; gap: 10px; margin: .6rem 0 1rem 0; }
@@ -312,6 +318,11 @@ h2.secao { margin-bottom: .8rem; }
 [data-testid="stMetricValue"], [data-testid="stMetricValue"] * { font-size: clamp(1.45rem, 2.1vw, 1.9rem) !important; }
 .st-key-kpi_1 [data-testid="stMetricValue"] *, .st-key-kpi_2 [data-testid="stMetricValue"] *,
 .st-key-kpi_3 [data-testid="stMetricValue"] * { white-space: nowrap !important; }
+
+html, body { background-color: #151B2D !important; }
+.achado { border-left: 3px solid hsl(172,55%,58%); background: hsla(172,45%,50%,.07); border-radius: 0 10px 10px 0;
+  padding: .85rem 1.1rem; color: #D5DCF0; font-size: 1rem; line-height: 1.65; margin: .3rem 0 1.2rem 0; }
+.achado b { color: #E6EBF8; font-weight: 600; }
 
 /* o fim de cada camada precisa continuar alcançável: a próxima só começa a cobrir depois de um respiro */
 .st-key-secao_1, .st-key-secao_2 { padding-bottom: clamp(7rem, 38vh, 22rem); }
@@ -490,8 +501,12 @@ def instalar_empilhamento():
         components.html(_JS_EMPILHAR, height=0)
 
 
-def rolar_para(seletor):
-    """Leva a página até um elemento (ao entrar no resultado ou ao refazer a entrevista)."""
+def rolar_para(seletor, folga=76):
+    """Leva a página até um elemento (ao entrar no resultado ou ao refazer a entrevista).
+
+    A barra fixa do Streamlit cobre os primeiros 60 px da tela, então o elemento para um pouco abaixo dela (folga).
+    A posição é medida com as camadas empilhadas desligadas por um instante: enquanto uma camada está "grudada",
+    ela se desloca e a medida normal erraria o destino."""
     ss_ = st.session_state
     ss_["rolar_n"] = ss_.get("rolar_n", 0) + 1
     js = """<script>
@@ -499,21 +514,52 @@ def rolar_para(seletor):
   var doc = document;
   try { if (window.frameElement && window.parent && window.parent.document) doc = window.parent.document; } catch (e) {}
   var win = doc.defaultView || window;
-  var reduz = win.matchMedia && win.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var tentativas = 0;
+  var FOLGA = __FOLGA__, cancelado = false, tentativas = 0;
   function achar() { return doc.querySelector("__SEL__"); }
-  function ir(suave) {
-    var el = achar();
-    if (!el) { if (tentativas++ < 30) win.setTimeout(function () { ir(suave); }, 100); return; }
-    el.scrollIntoView({ block: "start", behavior: (suave && !reduz) ? "smooth" : "auto" });
+  function rolante(el) {
+    var n = el.parentElement;
+    while (n && n !== doc.body && n !== doc.documentElement) {
+      var o = win.getComputedStyle(n).overflowY;
+      if ((o === "auto" || o === "scroll") && n.scrollHeight > n.clientHeight) return n;
+      n = n.parentElement;
+    }
+    return doc.scrollingElement;
   }
-  win.setTimeout(function () { ir(true); }, 150);
-  win.setTimeout(function () {  // confere o resultado final: o layout pode mudar enquanto a página carrega
-    var el = achar();
-    if (el) { var t = el.getBoundingClientRect().top; if (t < 20 || t > 160) el.scrollIntoView({ block: "start", behavior: "auto" }); }
-  }, 1100);
+  function posicaoNatural(el, sc) {
+    var presos = [], n = el.parentElement;
+    while (n && n !== doc.body) {
+      if (win.getComputedStyle(n).position === "sticky") presos.push([n, n.style.position, n.style.top]);
+      n = n.parentElement;
+    }
+    presos.forEach(function (p) { p[0].style.position = "relative"; p[0].style.top = "auto"; });
+    var topo = el.getBoundingClientRect().top;
+    presos.forEach(function (p) { p[0].style.position = p[1]; p[0].style.top = p[2]; });
+    var base = (sc === doc.scrollingElement) ? 0 : sc.getBoundingClientRect().top;
+    return topo - base + sc.scrollTop;
+  }
+  function alinhar() {
+    var el = achar(); if (!el) return false;
+    var sc = rolante(el);
+    var y = Math.max(0, Math.round(posicaoNatural(el, sc) - FOLGA));
+    if (Math.abs(sc.scrollTop - y) > 3) {
+      var antigo = sc.style.scrollBehavior;
+      sc.style.scrollBehavior = "auto";   // salto direto: não anima com o scroll suave do CSS
+      sc.scrollTop = y;
+      sc.style.scrollBehavior = antigo;
+    }
+    return true;
+  }
+  function parar() { cancelado = true; }
+  ["wheel", "touchmove", "keydown", "mousedown"].forEach(function (ev) { win.addEventListener(ev, parar, { once: true, passive: true }); });
+  function primeira() {
+    if (cancelado) return;
+    if (!alinhar()) { if (tentativas++ < 40) win.setTimeout(primeira, 100); return; }
+    // o layout ainda pode mudar enquanto a página termina de carregar: confere de novo algumas vezes
+    [300, 700, 1300, 2200, 3500].forEach(function (t) { win.setTimeout(function () { if (!cancelado) alinhar(); }, t); });
+  }
+  primeira();
 })();
-</script><!-- __N__ -->""".replace("__SEL__", seletor).replace("__N__", str(ss_["rolar_n"]))
+</script><!-- __N__ -->""".replace("__SEL__", seletor).replace("__FOLGA__", str(folga)).replace("__N__", str(ss_["rolar_n"]))
     try:
         st.html(js, unsafe_allow_javascript=True)
     except TypeError:
@@ -648,16 +694,21 @@ rodape = st.container(key="rodape")  # "Sobre os dados": fica depois de tudo, na
 with rodape:
     st.markdown(
         '<div class="sobre"><h2 class="secao">Sobre os dados</h2><div class="sobre-grid">'
-        '<div class="sobre-item"><div class="t">Fonte</div><p>State of Data Brazil 2025-2026 '
-        '(Data Hackers + Bain &amp; Company), microdados no Kaggle.</p></div>'
-        '<div class="sobre-item"><div class="t">Escopo</div><p>Quem vive no Brasil e é CLT, PJ, servidor ou freelancer.</p></div>'
-        f'<div class="sobre-item"><div class="t">Abrangência</div><p>{len(base.todas_profissoes)} profissões '
-        f'(técnicas e de gestão) e {len(base.habilidades)} tecnologias e práticas da base.</p></div>'
-        f'<div class="sobre-item"><div class="t">Privacidade</div><p>Só resultados agregados; recortes cruzados exigem '
-        f'no mínimo {MIN_N} pessoas; região = macrorregião; gênero, cor/raça e deficiência não são usados.</p></div>'
-        '<div class="sobre-item"><div class="t">Limites</div><p>Salário em faixas (usamos o ponto médio), amostra '
-        'voluntária concentrada no Sudeste, dados de fim de 2025 / início de 2026. A pesquisa não tem cidade, '
-        'então <strong>não há dado por capital</strong>.</p></div>'
+        '<div class="sobre-item"><div class="t">Fonte</div><p>Pesquisa State of Data Brasil 2025-2026 '
+        '(Data Hackers + Bain &amp; Company), com os dados abertos no Kaggle.</p></div>'
+        '<div class="sobre-item"><div class="t">Quem está na análise</div><p>Pessoas que vivem no Brasil e '
+        'trabalham como CLT, PJ, servidor público ou freelancer.</p></div>'
+        f'<div class="sobre-item"><div class="t">O que cobre</div><p>{len(base.todas_profissoes)} profissões '
+        f'(técnicas e de gestão) e {len(base.habilidades)} tecnologias e práticas.</p></div>'
+        f'<div class="sobre-item"><div class="t">Privacidade</div><p>Mostramos só resultados somados, nunca as respostas '
+        f'de cada pessoa. Um resultado só aparece quando pelo menos {MIN_N} respondentes se encaixam nele, para ninguém '
+        'ser identificado. Não usamos gênero, cor/raça nem deficiência.</p></div>'
+        '<div class="sobre-item"><div class="t">Como ler os salários</div><p>A pesquisa pergunta uma faixa de salário '
+        '(por exemplo, de R$ 8.001 a R$ 12.000), então usamos o valor do meio de cada faixa. Os gráficos mostram a '
+        '<strong>média</strong>: a soma de todos os salários dividida pelo número de respondentes.</p></div>'
+        '<div class="sobre-item"><div class="t">Limites</div><p>Responderam pessoas voluntárias, a maioria do Sudeste. '
+        'Os dados são do fim de 2025 e do começo de 2026. A pesquisa não pergunta a cidade, então '
+        '<strong>não existe dado por capital</strong>, só por região do Brasil.</p></div>'
         '</div></div>',
         unsafe_allow_html=True,
     )
@@ -756,7 +807,7 @@ def _chave_alfa(txt):
 MOMENTO = [
     ("exp", "Experiência na área", 268),
     ("nivel", "Nível atual", 282),
-    ("reg", "Macrorregião onde mora", 296),
+    ("reg", "Região do Brasil onde você mora", 296),
     ("int", "O que mais gosta de fazer", 310),
 ]
 
@@ -785,7 +836,7 @@ def formulario():
         st.markdown('<div class="etapa"><b>2</b>Seu momento</div>', unsafe_allow_html=True)
         exp = _momento("exp", "Experiência na área", ["Nenhuma"] + ORDEM_EXP) or "Nenhuma"
         nivel = _momento("nivel", "Nível atual", ia.NIVEIS) or "Ainda não atuo na área"
-        regiao = _momento("reg", "Macrorregião onde mora", motor.REGIOES) or "Não informado"
+        regiao = _momento("reg", "Região do Brasil onde você mora", motor.REGIOES) or "Não informado"
         interesse = _momento("int", "O que mais gosta de fazer", list(motor.INTERESSES)) or "Sem preferência"
         if st.form_submit_button("Concluir e ver minha recomendação", type="primary", width="stretch"):
             st.session_state.perfil = ia.validar_perfil(
@@ -802,24 +853,24 @@ def comparativo(br, rg, col, ordem, titulo, regiao, linha=False):
     d = pd.concat(partes)
     d[col] = d[col].astype(str)
     if d.empty:
-        st.info(f"Sem amostra mínima ({MIN_N} respondentes) para este recorte.")
+        st.info(f"Ainda não há respondentes suficientes (mínimo de {MIN_N}) para mostrar este recorte.")
         return
     kw = dict(
         x=col,
-        y="mediana",
+        y="media",
         color="Onde",
         custom_data=["n"],
         category_orders={col: ordem},
         color_discrete_sequence=PAR,
-        labels={"mediana": "Mediana (R$/mês)", col: ""},
+        labels={"media": "Salário médio (R$/mês)", col: ""},
     )
     fig = px.line(d, markers=True, **kw) if linha else px.bar(d, barmode="group", **kw)
-    fig.update_traces(hovertemplate="%{x}<br>Mediana: R$ %{y:,.0f}<br>n = %{customdata[0]}<extra></extra>")
+    fig.update_traces(hovertemplate="%{x}<br>Média: R$ %{y:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>")
     if linha:
         fig.update_traces(line=dict(width=4), marker=dict(size=10))
     mostrar(fig, titulo)
     if regiao in motor.REGIOES and rg.empty:
-        st.caption(f"Sem amostra mínima ({MIN_N}) em {regiao} neste recorte.")
+        st.caption(f"Na sua região ({regiao}) há menos de {MIN_N} respondentes neste recorte, por isso mostramos só o Brasil.")
 
 
 def _quebra(texto, n=13):
@@ -913,8 +964,8 @@ def cartoes_ranking(top, salarios):
     itens = []
     for pos, r in enumerate(top.itertuples(), start=1):
         sal = salarios.get(r.cargo)
-        sal_txt = f"Mediana de {moeda(sal)}/mês" if sal == sal and sal else "Sem dado salarial"
-        n_txt = f"{r.n_total} respondentes" + (" (amostra pequena, leia com cautela)" if r.amostra_reduzida else "")
+        sal_txt = f"Salário médio: {moeda(sal)}/mês" if sal == sal and sal else "Sem dado salarial"
+        n_txt = f"{r.n_total} respondentes" + (" (poucos respondentes: leia com cautela)" if r.amostra_reduzida else "")
         itens.append(
             f'<div class="rk{" topo" if pos == 1 else ""}" style="{_estilo_cargo(r.cargo)}">'
             f'<div class="pos">{pos}</div>'
@@ -959,17 +1010,17 @@ def resultado(perfil):
     if not perfil["habilidades"]:
         st.warning("Sem habilidades informadas, o ranking usa interesse, experiência e nível. Refaça para um resultado mais completo.")
     if rk.empty:
-        st.error("Sem amostra suficiente para recomendar.")
+        st.error("Ainda não há respondentes suficientes para fazer uma recomendação com esse perfil.")
         return
 
     top = motor.principais(rk, perfil["interesse"], perfil["nivel"], k=TOP_AREAS)
-    salarios = motor.panorama_todas_profissoes(base).set_index("cargo")["mediana_brasil"].to_dict()
+    salarios = motor.panorama_todas_profissoes(base).set_index("cargo")["media_brasil"].to_dict()
 
     st.subheader(
         f"As {len(top)} áreas que mais combinam com você",
-        help="A barra compara as áreas entre si. Nas profissões técnicas, a afinidade pondera tecnologias, práticas e "
-        "interesse; nos cargos de gestão e liderança (que não respondem ao bloco técnico da pesquisa), considera "
-        "interesse, senioridade e experiência.",
+        help="A barra compara as áreas entre si. Nas profissões técnicas, a afinidade considera as tecnologias e "
+        "práticas que você usa e o que você gosta de fazer. Nos cargos de gestão e liderança, que não respondem à "
+        "parte técnica da pesquisa, ela considera seu interesse, seu nível e sua experiência.",
     )
     st.markdown(cartoes_ranking(top, salarios), unsafe_allow_html=True)
     outras = rk[~rk.cargo.isin(top.cargo)]
@@ -983,9 +1034,9 @@ def resultado(perfil):
 
     st.subheader(
         "Diagnóstico: onde você está e onde quer chegar",
-        help="Em cada eixo técnico, 100% é dominar todo o conjunto de tecnologias típico da profissão. "
-        "A linha verde é você, a pontilhada âmbar é o perfil típico da profissão escolhida e a tracejada "
-        "cinza é a média da pesquisa.",
+        help="Cada ponta do gráfico é uma área de conhecimento. Em tecnologias, 100% significa usar todas as que "
+        "costumam ser usadas na profissão. A linha verde é você, a pontilhada âmbar é o profissional típico da "
+        "profissão escolhida e a tracejada cinza é a média de todos os respondentes.",
     )
     mais = st.toggle("Incluir as outras profissões na lista", key="cargo_mais")
     opcoes = list(top.cargo) + ([c for c in rk.cargo if c not in set(top.cargo)] if mais else [])
@@ -999,11 +1050,11 @@ def resultado(perfil):
     )
     if cargo in motor.CARGOS_GESTAO:
         st.info(
-            f"**{cargo}** é um cargo de gestão/liderança: na pesquisa State of Data, gestores respondem ao bloco de "
-            "liderança e não preenchem o bloco técnico de ferramentas (4.b–4.j). Abaixo você vê os comparativos de experiência e salário."
+            f"**{cargo}** é um cargo de gestão ou liderança. Na pesquisa, quem ocupa esses cargos não responde à parte "
+            "técnica (tecnologias e ferramentas), por isso abaixo você vê só os comparativos de experiência e salário."
         )
     elif base.n_total.get(cargo, 0) < MIN_N:
-        st.warning(f"A amostra de **{cargo}** na base tem menos de {MIN_N} respondentes (n={base.n_total.get(cargo, 0)}): interprete os recortes com cautela.")
+        st.warning(f"A base tem poucos respondentes de **{cargo}** (só {base.n_total.get(cargo, 0)}; o mínimo para uma leitura confiável é {MIN_N}). Veja os resultados como uma pista, não como regra.")
 
     dg = motor.diagnostico(base, perfil, cargo)
     gr, gl = st.columns([3, 2], gap="large")
@@ -1039,7 +1090,7 @@ def resultado(perfil):
     with g1:
         hab = motor.habilidades_cargo(base, cargo, perfil["habilidades"])
         if hab.empty:
-            st.info("Sem dados técnicos do bloco 4 para este cargo de gestão.")
+            st.info("Este cargo de gestão não tem dados técnicos na pesquisa.")
         else:
             hab["Situação"] = hab["tem"].map({True: "Você já usa", False: "Para desenvolver"})
             fig = px.bar(
@@ -1050,63 +1101,50 @@ def resultado(perfil):
                 color="Situação",
                 color_discrete_map={"Você já usa": TEAL, "Para desenvolver": AMBAR},
                 category_orders={"Situação": ["Você já usa", "Para desenvolver"]},
-                labels={"pct": "% dos profissionais do cargo que usam", "habilidade": ""},
+                labels={"pct": "% dos respondentes da profissão que usam", "habilidade": ""},
             )
             fig.update_xaxes(tickformat=".0%")
             fig.update_layout(height=max(420, len(hab) * 24))
             mostrar(fig, f"Tecnologias e práticas usadas em: {cargo}")
     with g2:
-        comparativo(t["nivel_br"], t["nivel_reg"], "senioridade", ORDEM_NIVEL, "Salário mediano por senioridade", reg)
+        comparativo(t["nivel_br"], t["nivel_reg"], "senioridade", ORDEM_NIVEL, "Salário médio por nível de carreira", reg)
     g3, g4 = st.columns(2)
     with g3:
         comparativo(
-            t["exp_br"], t["exp_reg"], "experiencia", ORDEM_EXP, "Salário mediano por tempo de experiência", reg, linha=True
+            t["exp_br"], t["exp_reg"], "experiencia", ORDEM_EXP, "Salário médio por tempo de experiência", reg, linha=True
         )
     with g4:
         r = t["regioes"]
         if r.empty:
-            st.info(f"Sem amostra mínima ({MIN_N}) por região para este cargo.")
+            st.info(f"Nenhuma região do Brasil tem {MIN_N} respondentes ou mais para esta profissão.")
         else:
             fig = px.bar(
                 r,
                 x="regiao",
-                y="mediana",
-                color="mediana",
+                y="media",
+                color="media",
                 color_continuous_scale=ESCALA,
-                custom_data=["n", "media"],
-                labels={"mediana": "Mediana (R$/mês)", "regiao": ""},
+                custom_data=["n"],
+                labels={"media": "Salário médio (R$/mês)", "regiao": ""},
             )
-            fig.update_traces(
-                hovertemplate="%{x}<br>Mediana: R$ %{y:,.0f}<br>Média: R$ %{customdata[1]:,.0f}"
-                "<br>n = %{customdata[0]}<extra></extra>"
-            )
-            mostrar(fig, "Salário por macrorregião")
-    with st.expander("Ver valores (mediana e quartis) por senioridade"):
-        x = t["nivel_br"].rename(
-            columns={
-                "senioridade": "Senioridade",
-                "n": "Respondentes",
-                "mediana": "Mediana",
-                "media": "Média",
-                "p25": "25%",
-                "p75": "75%",
-            }
+            fig.update_traces(hovertemplate="%{x}<br>Média: R$ %{y:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>")
+            mostrar(fig, "Salário médio por região do Brasil")
+    with st.expander("Ver os valores por nível de carreira"):
+        x = t["nivel_br"].copy()
+        x["faixa"] = x.apply(lambda r: f"{moeda(r.p25)} a {moeda(r.p75)}", axis=1)
+        x = x[["senioridade", "n", "media", "faixa"]].rename(
+            columns={"senioridade": "Nível", "n": "Respondentes", "media": "Salário médio",
+                     "faixa": "Faixa que reúne metade dos respondentes"}
         )
-        st.dataframe(x.style.format({c: moeda for c in ["Mediana", "Média", "25%", "75%"]}), hide_index=True)
+        st.dataframe(x.style.format({"Salário médio": moeda}), hide_index=True)
+        st.caption("A última coluna mostra entre quais valores está o salário da metade \"do meio\" dos respondentes, "
+                   "sem contar os 25% que ganham menos nem os 25% que ganham mais.")
 
 
 st.markdown(f"<style>{css_botoes(base)}</style>", unsafe_allow_html=True)
 
 with sec1:
     n_resp = f"{len(base.df):,}".replace(",", ".")
-    if st.session_state.get("perfil") is not None:
-        instrucao = ""
-    elif ia.disponivel():
-        instrucao = ("Conte, na conversa ou no formulário, com quais tecnologias você tem mais domínio ou familiaridade "
-                     "e descubra as áreas em que mais se encaixa e quanto o mercado paga. ")
-    else:
-        instrucao = ("Selecione abaixo as tecnologias com as quais você tem mais domínio ou familiaridade e descubra "
-                     "as áreas em que mais se encaixa e quanto o mercado paga. ")
     if st.session_state.get("perfil") is not None:
         instrucao = "Veja abaixo as áreas que mais combinam com o seu perfil e o que o mercado paga em cada uma."
     elif ia.disponivel():
@@ -1144,7 +1182,7 @@ with sec1:
 
     alvo_rolagem = ss.pop("rolar", None)
     if alvo_rolagem:
-        rolar_para(".st-key-resultado" if alvo_rolagem == "resultado" else ".st-key-secao_1")
+        rolar_para(".st-key-resultado", 76) if alvo_rolagem == "resultado" else rolar_para(".st-key-secao_1", 0)
 
 
 # ----------------------------------------------------------------------
@@ -1168,8 +1206,9 @@ def filtro(col_ui, rotulo, coluna, ordem=None, rotulos=None):
 with sec2:
     st.markdown(
         '<h2 class="secao">Painel geral</h2>'
-        '<p class="secao-sub">Salário informado em faixas mensais; os valores usam o ponto médio de cada faixa. '
-        "Sem seleção nos filtros, todos os valores são considerados.</p>",
+        '<p class="secao-sub">Aqui está o retrato de todos os respondentes da pesquisa. Como a pesquisa pergunta uma faixa '
+        "de salário por mês, usamos o valor do meio de cada faixa para calcular as médias. Use os filtros para olhar só um "
+        "grupo; sem nada marcado, todos entram.</p>",
         unsafe_allow_html=True,
     )
 
@@ -1191,18 +1230,26 @@ with sec2:
 
     k1, k2, k3, k4 = st.columns(4)
     if d.empty:
-        st.warning("Nenhum dado para os filtros selecionados.")
+        st.warning("Nenhum respondente se encaixa nesses filtros. Desmarque algum para ver os resultados.")
     elif len(d) < MIN_N:
-        st.warning(f"Menos de {MIN_N} respondentes com esses filtros; amplie a seleção.")
+        st.warning(f"Com esses filtros há menos de {MIN_N} respondentes, então não mostramos resultados. Desmarque algum filtro para ampliar.")
     else:
         with k1.container(key="kpi_1"):
-            st.metric("Dados analisados", f"{len(d):,}".replace(",", "."), help=f"{len(d) / len(base.df):.1%} da base no escopo.")
+            st.metric("Respondentes analisados", f"{len(d):,}".replace(",", "."),
+                      help=f"{len(d) / len(base.df):.1%} de todos os respondentes da base.")
         with k2.container(key="kpi_2"):
-            st.metric("Salário médio", moeda(d.salario.mean()))
+            st.metric("Salário médio", moeda(d.salario.mean()),
+                      help="A soma de todos os salários dividida pelo número de respondentes.")
         with k3.container(key="kpi_3"):
-            st.metric("Salário mediano", moeda(d.salario.median()))
+            st.metric("Salário do meio (mediana)", moeda(d.salario.median()),
+                      help="Se colocássemos todos os respondentes em fila, do menor para o maior salário, este é o salário "
+                           "de quem está no meio: metade ganha menos e metade ganha mais.")
         with k4.container(key="kpi_4"):
-            st.metric("Profissão mais frequente", d.cargo.mode()[0])
+            st.metric("Profissão mais comum", d.cargo.mode()[0], help="A profissão com mais respondentes nesta seleção.")
+        st.caption(
+            "Os gráficos usam a média, que é o escopo do projeto. O salário do meio aparece só aqui, como referência: "
+            "se ele for bem menor que a média, poucos salários muito altos estão puxando a média para cima."
+        )
 
         a, b = st.columns(2)
         with a:
@@ -1217,9 +1264,9 @@ with sec2:
                 custom_data=["n"],
                 labels={"media": "Salário médio (R$/mês)", "cargo": ""},
             )
-            fig.update_traces(hovertemplate="%{y}<br>Média: R$ %{x:,.0f}<br>n = %{customdata[0]}<extra></extra>")
+            fig.update_traces(hovertemplate="%{y}<br>Média: R$ %{x:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>")
             fig.update_layout(height=max(420, len(pc) * 30), showlegend=False)
-            mostrar(fig, f"Salário médio por profissão (mín. {MIN_N} respondentes)")
+            mostrar(fig, f"Salário médio por profissão (só profissões com {MIN_N} respondentes ou mais)")
         with b:
             fx = d.faixa_salarial.value_counts().reindex(motor.ORDEM_FAIXAS, fill_value=0).reset_index()
             fx.columns = ["faixa", "quantidade"]
@@ -1234,26 +1281,17 @@ with sec2:
             )
             fig.update_xaxes(tickangle=-45, tickfont=dict(size=11))
             fig.update_layout(showlegend=False)
-            mostrar(fig, "Distribuição por faixa salarial (R$ por mês)")
+            mostrar(fig, "Quantos respondentes há em cada faixa de salário (R$ por mês)")
 
-        with st.expander(f"Ver tabela completa de todas as {len(base.todas_profissoes)} profissões (incluindo n < {MIN_N})"):
-            pan = motor.panorama_todas_profissoes(base)
-            pan_exib = pan[["cargo", "grupo", "n_brasil", "mediana_brasil", "media_brasil", "p25_brasil", "p75_brasil"]].rename(
-                columns={
-                    "cargo": "Profissão",
-                    "grupo": "Grupo",
-                    "n_brasil": "n",
-                    "mediana_brasil": "Mediana",
-                    "media_brasil": "Média",
-                    "p25_brasil": "25%",
-                    "p75_brasil": "75%",
-                }
+        with st.expander(f"Ver a tabela das {len(base.todas_profissoes)} profissões (inclui as que têm menos de {MIN_N} respondentes)"):
+            pan = motor.panorama_todas_profissoes(base).copy()
+            pan["faixa"] = pan.apply(lambda r: f"{moeda(r.p25_brasil)} a {moeda(r.p75_brasil)}", axis=1)
+            pan_exib = pan[["cargo", "grupo", "n_brasil", "media_brasil", "faixa"]].rename(
+                columns={"cargo": "Profissão", "grupo": "Grupo", "n_brasil": "Respondentes", "media_brasil": "Salário médio",
+                         "faixa": "Faixa que reúne metade dos respondentes"}
             )
-            st.dataframe(
-                pan_exib.style.format({c: moeda for c in ["Mediana", "Média", "25%", "75%"]}),
-                hide_index=True,
-                width="stretch",
-            )
+            st.dataframe(pan_exib.style.format({"Salário médio": moeda}), hide_index=True, width="stretch")
+            st.caption(f"Profissões com menos de {MIN_N} respondentes aparecem aqui, mas os valores são só uma pista.")
 
         c, e = st.columns(2)
         with c:
@@ -1297,7 +1335,7 @@ with sec2:
                             z=[pr.loc[UF_REGIAO[u], "media"] for u in ufs],
                             text=[UF_REGIAO[u] for u in ufs],
                             customdata=[[int(pr.loc[UF_REGIAO[u], "n"])] for u in ufs],
-                            hovertemplate="<b>%{text}</b><br>Média: R$ %{z:,.0f}<br>n = %{customdata[0]}<extra></extra>",
+                            hovertemplate="<b>%{text}</b><br>Média: R$ %{z:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>",
                             marker_line_color=BG,
                             marker_line_width=0.8,
                             colorbar=dict(
@@ -1308,10 +1346,10 @@ with sec2:
                 fig.update_geos(fitbounds="geojson", visible=False, bgcolor="rgba(0,0,0,0)")
                 fig = estilizar(fig)
                 fig.update_layout(height=420, margin=dict(b=56))
-                titulo_grafico("Salário médio por macrorregião")
+                titulo_grafico("Salário médio por região do Brasil")
                 st.plotly_chart(fig, width="stretch", config=CFG)
                 st.caption(
-                    "Cada estado mostra a média da sua macrorregião (não há dado por estado). "
+                    "Cada estado mostra a média da sua região do Brasil (a pesquisa não tem dado por estado). "
                     f"Cinza: região com menos de {MIN_N} respondentes."
                 )
             except Exception:
@@ -1342,7 +1380,7 @@ with sec2:
             fig.update_traces(line=dict(color=TEAL, width=4), marker=dict(size=11, color=AMBAR))
             mostrar(fig, "Salário médio por tempo de experiência")
 
-    st.caption("Por privacidade (LGPD), a tabela de microdados não é exibida: apenas resultados agregados.")
+    st.caption("Para proteger a privacidade (LGPD), mostramos só resultados somados, nunca as respostas de cada pessoa.")
 
 
 # ----------------------------------------------------------------------
@@ -1352,16 +1390,18 @@ with sec3:
     df = base.df
     st.markdown(
         '<h2 class="secao">Hipóteses do projeto</h2>'
-        '<p class="secao-sub">Análise exploratória sobre o escopo do projeto abrangendo todas as profissões. '
-        "Não substitui a regressão ordinal prevista no cronograma.</p>",
+        '<p class="secao-sub">Uma hipótese é uma pergunta que queremos testar com os dados. Aqui olhamos três delas, '
+        "juntando todas as profissões. É uma primeira leitura das respostas da pesquisa: ela mostra o que aparece nos "
+        "dados, mas não prova que uma coisa causa a outra.</p>",
         unsafe_allow_html=True,
     )
 
-    st.markdown("#### H1. A senioridade explica mais diferença salarial do que a região?")
-    e2 = pd.DataFrame({
-        "Fator": ["Senioridade", "Profissão", "Experiência em dados", "Região", "Porte da empresa"],
-        "pct": [motor.eta2(df, c) for c in ["senioridade", "cargo", "experiencia", "regiao", "tamanho_empresa"]],
-    })
+    # ---- H1
+    st.markdown("#### H1. O que pesa mais no salário: o nível de carreira ou o lugar onde a pessoa mora?")
+    st.caption("Quanto maior a barra, mais aquele fator ajuda a entender por que umas pessoas ganham mais que outras.")
+    fatores = [("Senioridade", "senioridade"), ("Profissão", "cargo"), ("Experiência em dados", "experiencia"),
+               ("Região do Brasil", "regiao"), ("Porte da empresa", "tamanho_empresa")]
+    e2 = pd.DataFrame({"Fator": [f for f, _ in fatores], "pct": [motor.eta2(df, c) for _, c in fatores]})
     fig = px.bar(
         e2.sort_values("pct"),
         x="pct",
@@ -1369,36 +1409,67 @@ with sec3:
         orientation="h",
         color="pct",
         color_continuous_scale=ESCALA,
-        labels={"pct": "% da variação salarial explicada (η²)", "Fator": ""},
+        labels={"pct": "Parte das diferenças de salário que o fator explica", "Fator": ""},
     )
     fig.update_xaxes(tickformat=".0%")
-    mostrar(fig, "Variância salarial explicada por fator (η²)")
+    fig.update_traces(hovertemplate="%{y}: explica %{x:.1%} das diferenças de salário<extra></extra>")
+    mostrar(fig, "Quanto cada fator explica das diferenças de salário")
+    p_sen = float(e2.loc[e2.Fator == "Senioridade", "pct"].iloc[0])
+    p_reg = float(e2.loc[e2.Fator == "Região do Brasil", "pct"].iloc[0])
+    peso = "muito mais" if p_sen > 2 * p_reg else ("mais" if p_sen > p_reg else "menos")
+    st.markdown(
+        f'<div class="achado"><b>O que os dados mostram:</b> a senioridade explica cerca de {p_sen:.0%} das diferenças '
+        f"de salário entre os respondentes, e a região do Brasil explica {p_reg:.0%}. Nesta base, o nível de carreira "
+        f"pesa <b>{peso}</b> no salário do que a região onde a pessoa mora.</div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("O que significa \"explicar\"? (detalhe técnico)"):
+        st.markdown(
+            "Cada barra é uma medida chamada **η²** (eta ao quadrado). Ela vai de 0% a 100%: 0% quer dizer que o fator "
+            "não ajuda em nada a entender as diferenças de salário, e 100% quer dizer que ele explica tudo. Os fatores "
+            "não somam 100% porque se misturam: quem tem mais experiência costuma ter mais senioridade, por exemplo."
+        )
 
-    st.markdown("#### H2. Como os salários se distribuem entre os grupos de profissões e senioridade?")
+    # ---- H2
+    st.markdown("#### H2. Em cada nível de carreira, qual grupo de profissões ganha mais?")
+    st.caption("Cada cor é um grupo de profissões. Toque ou passe o mouse numa barra para ver o salário médio e quantos "
+               "respondentes ela representa.")
     hg = motor.resumo(df, ["grupo", "senioridade"], min_n=MIN_N)
-    if not hg.empty:
+    if hg.empty:
+        st.info(f"Ainda não há respondentes suficientes (mínimo de {MIN_N}) para mostrar esta comparação.")
+    else:
         fig = px.bar(
             hg,
             x="senioridade",
-            y="mediana",
+            y="media",
             color="grupo",
             barmode="group",
             category_orders={"senioridade": ORDEM_NIVEL},
             color_discrete_map=GRUPO_COR,
             custom_data=["n", "grupo"],
-            labels={"mediana": "Mediana salarial (R$/mês)", "senioridade": ""},
+            labels={"media": "Salário médio (R$/mês)", "senioridade": ""},
         )
         fig.update_traces(
-            hovertemplate="%{customdata[1]} — %{x}<br>Mediana: R$ %{y:,.0f}<br>n = %{customdata[0]}<extra></extra>"
+            hovertemplate="%{customdata[1]}, %{x}<br>Média: R$ %{y:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>"
         )
-        mostrar(fig, "Salário mediano por grupo de profissões e senioridade")
+        mostrar(fig, "Salário médio por grupo de profissões e nível de carreira")
+        sr = hg[hg["senioridade"] == "Sênior"].sort_values("media")
+        if len(sr) >= 2:
+            alto, baixo = sr.iloc[-1], sr.iloc[0]
+            st.markdown(
+                f'<div class="achado"><b>O que os dados mostram:</b> entre as pessoas de nível Sênior, o grupo '
+                f"<b>{_html.escape(str(alto.grupo))}</b> tem a maior média ({moeda(alto.media)}) e o grupo "
+                f"<b>{_html.escape(str(baixo.grupo))}</b> tem a menor ({moeda(baixo.media)}). A comparação só inclui "
+                f"grupos com pelo menos {MIN_N} respondentes naquele nível.</div>",
+                unsafe_allow_html=True,
+            )
 
-    st.markdown("#### H3. Tecnologias mais adotadas em todo o banco de dados")
+    # ---- H3
+    st.markdown("#### H3. Quais tecnologias os profissionais mais usam?")
+    st.caption("Conta só quem respondeu à parte técnica da pesquisa. Cargos de gestão não respondem a ela.")
     freq_df = base.freq_geral.reset_index()
     freq_df.columns = ["tecnologia", "pct_uso"]
-    freq_df["categoria"] = freq_df["tecnologia"].map(
-        {h: cat for cat, hs in base.categorias.items() for h in hs}
-    )
+    freq_df["categoria"] = freq_df["tecnologia"].map({h: cat for cat, hs in base.categorias.items() for h in hs})
     top_tec = freq_df.sort_values("pct_uso", ascending=False).head(20).sort_values("pct_uso")
     fig = px.bar(
         top_tec,
@@ -1407,20 +1478,26 @@ with sec3:
         color="categoria",
         orientation="h",
         color_discrete_map={c: hexhsl(h, 58, 64) for c, h in MATIZ_CAT.items()},
-        labels={"pct_uso": "% dos respondentes técnicos que utilizam", "tecnologia": ""},
+        labels={"pct_uso": "% dos respondentes que usam", "tecnologia": "", "categoria": "Tipo"},
     )
     fig.update_xaxes(tickformat=".0%")
     fig.update_layout(height=max(460, len(top_tec) * 24))
-    mostrar(fig, "Top 20 tecnologias e práticas mais usadas na base")
+    mostrar(fig, "As 20 tecnologias e práticas mais usadas")
+    t1, t2 = freq_df.sort_values("pct_uso", ascending=False).head(2).itertuples()
+    st.markdown(
+        f'<div class="achado"><b>O que os dados mostram:</b> a mais usada é <b>{_html.escape(str(t1.tecnologia))}</b>, '
+        f"presente no dia a dia de {t1.pct_uso:.0%} dos respondentes técnicos, seguida de "
+        f"<b>{_html.escape(str(t2.tecnologia))}</b> ({t2.pct_uso:.0%}).</div>",
+        unsafe_allow_html=True,
+    )
 
-    with st.expander("Ver todas as tecnologias e práticas carregadas da base"):
+    with st.expander("Ver todas as tecnologias e práticas da base"):
         st.dataframe(
             freq_df.sort_values("pct_uso", ascending=False).assign(
                 pct_formatado=lambda x: (x["pct_uso"] * 100).map("{:.1f}%".format)
             )[["categoria", "tecnologia", "pct_formatado"]].rename(
-                columns={"categoria": "Categoria", "tecnologia": "Tecnologia / Prática", "pct_formatado": "Adesão"}
+                columns={"categoria": "Tipo", "tecnologia": "Tecnologia ou prática", "pct_formatado": "% que usa"}
             ),
             hide_index=True,
             width="stretch",
         )
-
