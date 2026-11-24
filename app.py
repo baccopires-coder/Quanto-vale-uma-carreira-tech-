@@ -578,8 +578,21 @@ def subir_ao_topo():
     ss_["rolar_n"] = ss_.get("rolar_n", 0) + 1
     js = """<script>
 (function () {
-  var doc = document;
-  try { if (window.frameElement && window.parent && window.parent.document) doc = window.parent.document; } catch (e) {}
+  // Acha o documento que contém o app. No Streamlit Cloud o app roda dentro de um iframe da página-casca, então
+  // "o pai" pode ser a casca (sem o app); por isso sobe pelos iframes só até achar o conteúdo do app.
+  function docApp() {
+    var w = window;
+    for (var i = 0; i < 5; i++) {
+      try {
+        var d = w.document;
+        if (d.querySelector('[data-testid="stMain"]') || d.querySelector('.st-key-secao_1')) return d;
+        if (w.parent === w) break;
+        w = w.parent;
+      } catch (e) { break; }
+    }
+    return document;
+  }
+  var doc = docApp();
   var win = doc.defaultView || window, t0 = Date.now(), parado = false;
   var SEL = ['[data-testid="stMain"]', '.stMain', 'section.main', '[data-testid="stAppViewContainer"]', '.stAppViewContainer'];
   function topo() {
