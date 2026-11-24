@@ -1011,16 +1011,28 @@ def botao_pdf(perfil, top, salarios, cargo, dg, tabelas, analise):
     except Exception as e:  # o PDF é um extra: se falhar, o resto da página continua funcionando
         st.caption(f"Não foi possível gerar o PDF agora ({type(e).__name__}).")
         return
+    st.markdown(
+        "<style>"
+        ".st-key-slot_pdf{margin:.4rem 0 1.6rem}"
+        ".st-key-slot_pdf button{min-height:3.5rem;font-size:1.08rem;font-weight:700;border:0;"
+        "background:linear-gradient(135deg,#8B5CF6,#6D44D8);box-shadow:0 6px 22px rgba(139,92,246,.38)}"
+        ".st-key-slot_pdf button:hover{filter:brightness(1.12)}"
+        ".st-key-slot_pdf [data-testid=stCaptionContainer]{text-align:center}"
+        "</style>",
+        unsafe_allow_html=True,
+    )
     st.download_button(
-        "Baixar meu diagnóstico em PDF",
+        "Baixe seu diagnóstico em PDF",
         data=pdf,
         file_name=f"diagnostico-carreira-tech-{_slug(cargo)}.pdf",
         mime="application/pdf",
         icon=":material/download:",
+        type="primary",
+        width="stretch",
         key="baixar_pdf",
     )
-    st.caption(f"O PDF traz seu perfil, as áreas com mais afinidade, a análise e o diagnóstico de **{cargo}**, a profissão "
-               "selecionada abaixo. Para outra profissão, troque a seleção e baixe de novo.")
+    st.caption(f"Leva seu perfil, as áreas com mais afinidade, a análise e o diagnóstico de **{cargo}** (a profissão "
+               "selecionada mais abaixo). Escolheu outra? Baixe de novo.")
 
 
 def resultado(perfil):
@@ -1033,6 +1045,7 @@ def resultado(perfil):
         nivel=perfil["nivel"],
     )
     reg = perfil["regiao"]
+    slot_pdf = st.container(key="slot_pdf")  # destaque no topo; preenchido no fim, quando já temos profissão, análise e tabelas
     st.subheader("Seu perfil")
     st.markdown(perfil_html(perfil), unsafe_allow_html=True)
     if not perfil["habilidades"]:
@@ -1040,8 +1053,6 @@ def resultado(perfil):
     if rk.empty:
         st.error("Ainda não há respondentes suficientes para fazer uma recomendação com esse perfil.")
         return
-
-    slot_pdf = st.container(key="slot_pdf")  # preenchido no fim da função, quando já temos profissão, análise e tabelas
 
     top = motor.principais(rk, perfil["interesse"], perfil["nivel"], k=TOP_AREAS)
     salarios = motor.panorama_todas_profissoes(base).set_index("cargo")["media_brasil"].to_dict()
@@ -1215,7 +1226,7 @@ with sec1:
 
     alvo_rolagem = ss.pop("rolar", None)
     if alvo_rolagem:
-        rolar_para(".st-key-resultado", 76) if alvo_rolagem == "resultado" else rolar_para(".st-key-secao_1", 0)
+        rolar_para(".st-key-secao_1", 600)  # topo da página (a folga grande limita o destino a 0), ao concluir e ao refazer
 
 
 # ----------------------------------------------------------------------
