@@ -568,6 +568,50 @@ def rolar_para(seletor, folga=76):
         components.html(js, height=0)
 
 
+def subir_ao_topo():
+    """Leva a página ao topo ao concluir (ou refazer) a entrevista.
+
+    Em vez de medir a posição de um elemento, zera a rolagem de todos os contêineres rolantes possíveis e repete por
+    alguns segundos, porque o resultado ainda está sendo montado (a altura da página muda). É disparado no INÍCIO da
+    execução, antes do cálculo do resultado. Se a pessoa rolar por conta própria depois de ~1 s, a repetição para."""
+    ss_ = st.session_state
+    ss_["rolar_n"] = ss_.get("rolar_n", 0) + 1
+    js = """<script>
+(function () {
+  var doc = document;
+  try { if (window.frameElement && window.parent && window.parent.document) doc = window.parent.document; } catch (e) {}
+  var win = doc.defaultView || window, t0 = Date.now(), parado = false;
+  var SEL = ['[data-testid="stMain"]', '.stMain', 'section.main', '[data-testid="stAppViewContainer"]', '.stAppViewContainer'];
+  function topo() {
+    var els = [doc.scrollingElement, doc.documentElement, doc.body];
+    SEL.forEach(function (s) { var e = doc.querySelector(s); if (e) els.push(e); });
+    var a = doc.querySelector('.st-key-secao_1'), n = a && a.parentElement;
+    while (n && n !== doc.documentElement) { els.push(n); n = n.parentElement; }
+    els.forEach(function (e) {
+      if (e && e.scrollTop > 0) {
+        var b = e.style.scrollBehavior;
+        e.style.scrollBehavior = "auto";   // salto direto, sem o scroll suave do CSS
+        e.scrollTop = 0;
+        e.style.scrollBehavior = b;
+      }
+    });
+    try { win.scrollTo(0, 0); } catch (e) {}
+  }
+  ["wheel", "touchmove", "keydown"].forEach(function (ev) {
+    win.addEventListener(ev, function () { if (Date.now() - t0 > 1000) parado = true; }, { passive: true });
+  });
+  [0, 50, 150, 300, 600, 1000, 1600, 2400, 3600, 5000].forEach(function (ms) {
+    win.setTimeout(function () { if (!parado) topo(); }, ms);
+  });
+})();
+</script><!-- __N__ -->""".replace("__N__", str(ss_["rolar_n"]))
+    try:
+        st.html(js, unsafe_allow_javascript=True)
+    except TypeError:
+        import streamlit.components.v1 as components
+        components.html(js, height=0)
+
+
 @st.cache_resource
 def get_base_v2():
     return motor.carregar_base()
@@ -1030,9 +1074,10 @@ def botao_pdf(perfil, top, salarios, cargo, dg, tabelas, analise):
         type="primary",
         width="stretch",
         key="baixar_pdf",
+        on_click="ignore",  # o clique só baixa o arquivo: não reexecuta o app nem mexe na rolagem
     )
     st.caption(f"Leva seu perfil, as áreas com mais afinidade, a análise e o diagnóstico de **{cargo}** (a profissão "
-               "selecionada mais abaixo). Escolheu outra? Baixe de novo.")
+               "selecionada no diagnóstico, lá em cima). Escolheu outra? Baixe de novo.")
 
 
 def resultado(perfil):
@@ -1045,7 +1090,6 @@ def resultado(perfil):
         nivel=perfil["nivel"],
     )
     reg = perfil["regiao"]
-    slot_pdf = st.container(key="slot_pdf")  # destaque no topo; preenchido no fim, quando já temos profissão, análise e tabelas
     st.subheader("Seu perfil")
     st.markdown(perfil_html(perfil), unsafe_allow_html=True)
     if not perfil["habilidades"]:
@@ -1181,7 +1225,8 @@ def resultado(perfil):
         st.caption("A última coluna mostra entre quais valores está o salário da metade \"do meio\" dos respondentes, "
                    "sem contar os 25% que ganham menos nem os 25% que ganham mais.")
 
-    with slot_pdf:
+    with st.container(key="slot_pdf"):  # espaço livre no fim do resultado, antes do Painel geral
+        st.subheader("Leve seu diagnóstico")
         botao_pdf(perfil, top, salarios, cargo, dg, t, ss.analise)
 
 
@@ -1206,6 +1251,8 @@ with sec1:
     )
     ss = st.session_state
     ss.setdefault("perfil", None)
+    if ss.pop("rolar", None):
+        subir_ao_topo()  # antes de montar o resultado: a página já volta ao topo enquanto o resto carrega
     if ss.perfil is None:
         if ia.disponivel():
             modo = st.radio("Como prefere responder?", ["Entrevista com IA", "Formulário rápido"], horizontal=True)
@@ -1223,10 +1270,6 @@ with sec1:
             st.rerun()
         with st.container(key="resultado"):
             resultado(ss.perfil)
-
-    alvo_rolagem = ss.pop("rolar", None)
-    if alvo_rolagem:
-        rolar_para(".st-key-secao_1", 600)  # topo da página (a folga grande limita o destino a 0), ao concluir e ao refazer
 
 
 # ----------------------------------------------------------------------
