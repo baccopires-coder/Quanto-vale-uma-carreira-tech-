@@ -12,6 +12,7 @@ import streamlit as st
 
 import ia
 import motor
+import relatorio
 from motor import MIN_N, ORDEM_EXP, ORDEM_NIVEL
 
 st.set_page_config(page_title="Quanto vale uma carreira tech?", page_icon="📊", layout="wide")
@@ -995,6 +996,33 @@ def perfil_html(perfil):
     return f'<div class="perfil"><div class="perfil-fatos">{fatos_html}</div>{bloco}</div>'
 
 
+def _slug(txt):
+    sem_acento = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", sem_acento.lower()).strip("-") or "diagnostico"
+
+
+def botao_pdf(perfil, top, salarios, cargo, dg, tabelas, analise):
+    """Botão de download do diagnóstico em PDF (profissão escolhida no seletor + análise + tabelas)."""
+    try:
+        pdf = relatorio.gerar_pdf(
+            perfil, top, salarios, cargo, dg, tabelas,
+            motor.habilidades_cargo(base, cargo, perfil["habilidades"]), analise, int(base.n_total.get(cargo, 0)),
+        )
+    except Exception as e:  # o PDF é um extra: se falhar, o resto da página continua funcionando
+        st.caption(f"Não foi possível gerar o PDF agora ({type(e).__name__}).")
+        return
+    st.download_button(
+        "Baixar meu diagnóstico em PDF",
+        data=pdf,
+        file_name=f"diagnostico-carreira-tech-{_slug(cargo)}.pdf",
+        mime="application/pdf",
+        icon=":material/download:",
+        key="baixar_pdf",
+    )
+    st.caption(f"O PDF traz seu perfil, as áreas com mais afinidade, a análise e o diagnóstico de **{cargo}**, a profissão "
+               "selecionada abaixo. Para outra profissão, troque a seleção e baixe de novo.")
+
+
 def resultado(perfil):
     ss = st.session_state
     rk = motor.ranking(
@@ -1012,6 +1040,8 @@ def resultado(perfil):
     if rk.empty:
         st.error("Ainda não há respondentes suficientes para fazer uma recomendação com esse perfil.")
         return
+
+    slot_pdf = st.container(key="slot_pdf")  # preenchido no fim da função, quando já temos profissão, análise e tabelas
 
     top = motor.principais(rk, perfil["interesse"], perfil["nivel"], k=TOP_AREAS)
     salarios = motor.panorama_todas_profissoes(base).set_index("cargo")["media_brasil"].to_dict()
@@ -1139,6 +1169,9 @@ def resultado(perfil):
         st.dataframe(x.style.format({"Salário médio": moeda}), hide_index=True)
         st.caption("A última coluna mostra entre quais valores está o salário da metade \"do meio\" dos respondentes, "
                    "sem contar os 25% que ganham menos nem os 25% que ganham mais.")
+
+    with slot_pdf:
+        botao_pdf(perfil, top, salarios, cargo, dg, t, ss.analise)
 
 
 st.markdown(f"<style>{css_botoes(base)}</style>", unsafe_allow_html=True)
