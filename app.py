@@ -1128,8 +1128,8 @@ def radar(dg, cargo):
     ])
     fig = estilizar(fig)
     fig.update_layout(
-        margin=dict(l=92, r=92, t=34, b=56),
-        height=470,
+        margin=dict(l=80, r=62, t=30, b=60),  # laterais só do tamanho dos rótulos: sobra mais espaço para o radar no celular
+        height=400,
         legend=dict(orientation="h", y=-0.1, x=0.5, xanchor="center", yanchor="top"),
         polar=dict(
             bgcolor="rgba(0,0,0,0)",
@@ -1137,10 +1137,11 @@ def radar(dg, cargo):
                 range=[0, 100],
                 tickvals=[25, 50, 75, 100],
                 ticksuffix="%",
-                angle=90,
-                gridcolor="rgba(255,255,255,.14)",
-                linecolor="rgba(255,255,255,.14)",
-                tickfont=dict(size=10, color="#AEB8E6"),
+                angle=67.5,  # entre os eixos "Nuvem" e "Bancos de dados": os números não ficam por cima de uma linha do radar
+                tickangle=0,  # números na horizontal
+                gridcolor="rgba(255,255,255,.22)",
+                linecolor="rgba(255,255,255,.22)",
+                tickfont=dict(size=11, color="#F1F5FF"),
             ),
             angularaxis=dict(
                 gridcolor="rgba(255,255,255,.14)",
