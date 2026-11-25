@@ -1113,12 +1113,16 @@ def radar(dg, cargo, compacto=False):
     """compacto=True: versão para celular (menos margem, para o círculo ocupar quase toda a largura); False: computador."""
     eixos = list(dg["eixo"]) + [dg["eixo"].iloc[0]]
     rotulos = [_quebra(e, 11 if compacto else 14) for e in eixos]
+    n_eixos = len(eixos) - 1
+    angulos = [i * 360 / n_eixos for i in range(n_eixos)]  # 0° = direita, sentido anti-horário (mesma ordem de antes)
+    theta = angulos + [angulos[0]]  # repete o primeiro ponto para fechar o polígono
+    ANGULO_ESCALA = 360 / n_eixos / 2 + 360 / n_eixos * 1  # meio do caminho entre o 2º e o 3º eixo (hoje: entre "Bancos de dados" e "Nuvem")
 
     def serie(col, nome, cor, dash, width, fill=None, quem="você"):
         v = list(dg[col]) + [dg[col].iloc[0]]
         return go.Scatterpolar(
             r=v,
-            theta=rotulos,
+            theta=theta,
             customdata=[quebra_hover(f"Em {e}, {quem} está em {v:.0f}%.", 40) for e, v in zip(eixos, v)],
             name=nome,
             mode="lines+markers",
@@ -1133,6 +1137,20 @@ def radar(dg, cargo, compacto=False):
         serie("comunidade", "Média da pesquisa", "#E5E7EB", "dash", 2, quem="a média de todos os respondentes"),
         serie("alvo", "Perfil típico da profissão", AMBAR, "dot", 3, quem="o profissional típico da profissão"),
         serie("voce", "Você", TEAL, "solid", 4, fill="rgba(53,208,186,.2)", quem="você"),
+        # Escala 25/50/75/100%: cada número é um "selo" com fundo opaco, desenhado por último (por cima das linhas do gráfico),
+        # para que nenhuma linha passe por cima do texto.
+        go.Scatterpolar(
+            r=[25, 50, 75, 100],
+            theta=[ANGULO_ESCALA] * 4,
+            mode="markers+text",
+            text=["25%", "50%", "75%", "100%"],
+            textposition="middle center",
+            textfont=dict(size=10 if compacto else 11, color="#F1F5FF", family=FONTE),
+            marker=dict(symbol="square", size=32 if compacto else 38, color="#1C2238",
+                        line=dict(color="rgba(255,255,255,.28)", width=1)),
+            hoverinfo="skip",
+            showlegend=False,
+        ),
     ])
     fig = estilizar(fig)
     fig.update_layout(
@@ -1143,15 +1161,20 @@ def radar(dg, cargo, compacto=False):
             bgcolor="rgba(0,0,0,0)",
             radialaxis=dict(
                 range=[0, 100],
-                tickvals=[25, 50, 75, 100],
-                ticksuffix="%",
-                angle=67.5,  # entre os eixos "Nuvem" e "Bancos de dados": os números não ficam por cima de uma linha do radar
-                tickangle=0,  # números na horizontal
+                tickvals=[25, 50, 75, 100],  # só os anéis; os números são os selos desenhados acima
+                showticklabels=False,
+                showline=False,
+                angle=ANGULO_ESCALA,
                 gridcolor="rgba(255,255,255,.22)",
                 linecolor="rgba(255,255,255,.22)",
-                tickfont=dict(size=11 if compacto else 12, color="#F1F5FF"),
             ),
             angularaxis=dict(
+                type="linear",
+                direction="counterclockwise",
+                rotation=0,
+                tickmode="array",
+                tickvals=angulos,
+                ticktext=rotulos[:-1],
                 gridcolor="rgba(255,255,255,.14)",
                 linecolor="rgba(255,255,255,.14)",
                 tickfont=dict(size=10 if compacto else 12, color="#CBD3EA"),
