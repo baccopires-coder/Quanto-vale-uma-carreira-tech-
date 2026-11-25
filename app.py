@@ -688,7 +688,11 @@ def _quebra_rotulo(texto, n, max_linhas=2):
         else:
             atual = f"{atual} {p}".strip()
     linhas.append(atual)
-    return "<br>".join(linhas[:max_linhas])
+    estourou = len(linhas) > max_linhas
+    linhas = linhas[:max_linhas]
+    if estourou and not linhas[-1].endswith("…"):
+        linhas[-1] += "…"  # avisa que o rótulo foi encurtado (o texto completo está no hover)
+    return "<br>".join(linhas)
 
 
 def _faixa_curta(txt):
@@ -701,8 +705,44 @@ def _faixa_curta(txt):
     return f"{round(nums[0] / 1000)}–{nums[1] // 1000}k"
 
 
+def _exp_curta(txt):
+    """Rótulo curto de experiência para telas estreitas: 'Menos de 1 ano' -> '< 1'; 'de 3 a 4 anos' -> '3–4'; 'Mais de 10 anos' -> '10+'.
+    Devolve None quando o texto não é uma faixa de experiência (aí o rótulo segue a quebra normal)."""
+    t = str(txt)
+    nums = re.findall(r"\d+", t)
+    if not nums or "ano" not in t:
+        return None
+    if t.startswith("Menos"):
+        return f"< {nums[0]}"
+    if t.startswith("Mais"):
+        return f"{nums[0]}+"
+    if len(nums) >= 2:
+        return f"{nums[0]}–{nums[1]}"
+    return None
+
+
+# Rótulos do eixo X abreviados só no eixo (o texto completo continua no hover): evitam a sobreposição em telas estreitas.
+_ABREV_X = {
+    "Especialista/Staff+": "Espec.<br>Staff+",
+    "Gestão/Liderança": "Gestão/<br>Líder.",
+}
+
+
+def _quebrar_titulo_eixo(fig):
+    """Títulos de eixo longos não quebram sozinhos no Plotly e saem cortados no celular: quebramos em linhas curtas."""
+    for nome, n in (("xaxis", 30), ("yaxis", 24)):
+        eixo = getattr(fig.layout, nome)
+        texto = eixo.title.text if eixo.title is not None else None
+        if texto and "<br>" not in texto and len(texto) > n:
+            eixo.title.text = quebra_hover(texto, n)
+
+
 def _ajustar_rotulos(fig):
     """Eixos categóricos: rótulos quebrados em linhas curtas, sem rotação, para caber em telas estreitas."""
+    barras_horizontais = any(tr.type == "bar" and getattr(tr, "orientation", None) == "h" for tr in fig.data)
+    if barras_horizontais:  # eixo dos valores (%, R$): poucos números e sem texto girado, para não se misturarem
+        fig.update_xaxes(tickangle=0, nticks=4)
+    _quebrar_titulo_eixo(fig)
     for eixo_dado, eixo_fig, largura in (("x", fig.update_xaxes, 11), ("y", fig.update_yaxes, 28)):
         cats = []
         for tr in fig.data:
@@ -719,12 +759,20 @@ def _ajustar_rotulos(fig):
                     cats.append(v)
         if not cats or len(cats) > 8 and eixo_dado == "x":
             continue
-        kw = dict(tickmode="array", tickvals=cats, ticktext=[_quebra_rotulo(c, largura) for c in cats])
+        textos = [_quebra_rotulo(c, largura, max_linhas=2 if eixo_dado == "x" else 3) for c in cats]
+        if eixo_dado == "x":
+            textos = [_ABREV_X.get(c, t) for c, t in zip(cats, textos)]
+            curtos = [_exp_curta(c) for c in cats]
+            if all(c is not None for c in curtos):  # eixo de tempo de experiência: rótulos curtos não se misturam no celular
+                textos = curtos
+        kw = dict(tickmode="array", tickvals=cats, ticktext=textos)
         if eixo_dado == "x":
             kw["tickangle"] = 0
         eixo_fig(**kw)
         if eixo_dado == "y" and max(len(c) for c in cats) > 40:  # rótulos muito longos: mais altura por barra
-            fig.update_layout(height=max(fig.layout.height or 0, len(cats) * 40 + 70))
+            linhas = max(t.count("<br>") + 1 for t in textos)
+            por_barra = 40 if linhas <= 2 else 56
+            fig.update_layout(height=max(fig.layout.height or 0, len(cats) * por_barra + 70))
 
 
 def estilizar(fig):
@@ -1042,7 +1090,7 @@ def comparativo(br, rg, col, ordem, titulo, regiao, linha=False, cargo=None):
         st.caption(f"Na sua região ({regiao}) há menos de {MIN_N} respondentes neste recorte, por isso mostramos só o Brasil.")
 
 
-def _quebra(texto, n=13):
+def _quebra(texto, n=11):
     linhas, atual = [], ""
     for p in texto.split():
         if atual and len(atual) + 1 + len(p) > n:
@@ -1080,8 +1128,8 @@ def radar(dg, cargo):
     ])
     fig = estilizar(fig)
     fig.update_layout(
-        margin=dict(l=58, r=58, t=28, b=56),
-        height=460,
+        margin=dict(l=92, r=92, t=34, b=56),
+        height=470,
         legend=dict(orientation="h", y=-0.1, x=0.5, xanchor="center", yanchor="top"),
         polar=dict(
             bgcolor="rgba(0,0,0,0)",
@@ -1097,7 +1145,7 @@ def radar(dg, cargo):
             angularaxis=dict(
                 gridcolor="rgba(255,255,255,.14)",
                 linecolor="rgba(255,255,255,.14)",
-                tickfont=dict(size=11, color="#CBD3EA"),
+                tickfont=dict(size=10, color="#CBD3EA"),
             ),
         ),
     )
@@ -1638,7 +1686,7 @@ with sec2:
                 y="media",
                 markers=True,
                 custom_data=["hover"],
-                labels={"experiencia": "Experiência em dados", "media": "Salário médio (R$/mês)"},
+                labels={"experiencia": "Experiência em dados (anos)", "media": "Salário médio (R$/mês)"},
             )
             fig.update_traces(line=dict(color=TEAL, width=4), marker=dict(size=11, color=AMBAR),
                               hovertemplate="%{customdata[0]}<extra></extra>")
