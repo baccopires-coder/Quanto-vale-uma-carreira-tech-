@@ -1134,20 +1134,18 @@ def radar(dg, cargo, compacto=False):
         )
 
     fig = go.Figure([
-        serie("comunidade", "Média da pesquisa", "#E5E7EB", "dash", 2, quem="a média de todos os respondentes"),
-        serie("alvo", "Perfil típico da profissão", AMBAR, "dot", 3, quem="o profissional típico da profissão"),
-        serie("voce", "Você", TEAL, "solid", 4, fill="rgba(53,208,186,.2)", quem="você"),
-        # Escala 25/50/75/100%: cada número é um "selo" com fundo opaco, desenhado por último (por cima das linhas do gráfico),
-        # para que nenhuma linha passe por cima do texto.
+        serie("comunidade", "Média da pesquisa", "#D9DFF2", "dash", 2, quem="a média de todos os respondentes"),
+        serie("alvo", "Perfil típico da profissão", AMBAR, "dot", 2.5, quem="o profissional típico da profissão"),
+        serie("voce", "Você", TEAL, "solid", 3.5, fill="rgba(53,208,186,.13)", quem="você"),
+        # Escala 25/50/75/100%: texto na horizontal, sem caixa, desenhado por último (por cima das linhas). A cor lilás não é usada
+        # por nenhuma série (cinza, âmbar e verde-água), então a escala se destaca sem esconder nada do gráfico.
         go.Scatterpolar(
             r=[25, 50, 75, 100],
             theta=[ANGULO_ESCALA] * 4,
-            mode="markers+text",
-            text=["25%", "50%", "75%", "100%"],
-            textposition="middle center",
-            textfont=dict(size=10 if compacto else 11, color="#F1F5FF", family=FONTE),
-            marker=dict(symbol="square", size=32 if compacto else 38, color="#1C2238",
-                        line=dict(color="rgba(255,255,255,.28)", width=1)),
+            mode="text",
+            text=["<b>25%</b>", "<b>50%</b>", "<b>75%</b>", "<b>100%</b>"],
+            textposition="top center",
+            textfont=dict(size=10 if compacto else 11, color="#C9B8FF", family=FONTE),
             hoverinfo="skip",
             showlegend=False,
         ),
@@ -1165,8 +1163,8 @@ def radar(dg, cargo, compacto=False):
                 showticklabels=False,
                 showline=False,
                 angle=ANGULO_ESCALA,
-                gridcolor="rgba(255,255,255,.22)",
-                linecolor="rgba(255,255,255,.22)",
+                gridcolor="rgba(167,139,250,.20)",  # anéis lilás suaves: marcam a escala sem competir com as séries
+                linecolor="rgba(167,139,250,.20)",
             ),
             angularaxis=dict(
                 type="linear",
@@ -1175,8 +1173,8 @@ def radar(dg, cargo, compacto=False):
                 tickmode="array",
                 tickvals=angulos,
                 ticktext=rotulos[:-1],
-                gridcolor="rgba(255,255,255,.14)",
-                linecolor="rgba(255,255,255,.14)",
+                gridcolor="rgba(159,176,214,.12)",  # linhas dos eixos bem discretas (cinza-azulado)
+                linecolor="rgba(159,176,214,.12)",
                 tickfont=dict(size=10 if compacto else 12, color="#CBD3EA"),
             ),
         ),
