@@ -178,7 +178,13 @@ INTERESSES = {
     "Sem preferência": [],
 }
 
-def ranking(base: Base, hab_usuario, interesse="Sem preferência", nivel=None, experiencia=None, top_k=12) -> pd.DataFrame:
+# Segunda trilha (opcional): "Nenhum" + as mesmas áreas de interesse (sem "Sem preferência").
+INTERESSES_2 = ["Nenhum"] + [k for k in INTERESSES if k != "Sem preferência"]
+PESO_INTERESSE_2 = 0.5  # a trilha secundária vale metade da principal no bônus de interesse
+
+
+def ranking(base: Base, hab_usuario, interesse="Sem preferência", nivel=None, experiencia=None, top_k=12,
+            interesse2="Nenhum") -> pd.DataFrame:
     meu = [h for h in hab_usuario if h in base.habilidades]
     u = pd.Series(0.0, index=base.freq.columns)
     u[meu] = 1.0
@@ -187,7 +193,12 @@ def ranking(base: Base, hab_usuario, interesse="Sem preferência", nivel=None, e
     for cargo in base.todas_profissoes:
         n_tot = int(base.n_total[cargo])
         n_h = int(base.n_hab[cargo])
-        bonus = 1.0 if cargo in INTERESSES.get(interesse, []) else 0.0
+        if cargo in INTERESSES.get(interesse, []):
+            bonus = 1.0
+        elif interesse2 != interesse and cargo in INTERESSES.get(interesse2, []):
+            bonus = PESO_INTERESSE_2
+        else:
+            bonus = 0.0
         if cargo in CARGOS_GESTAO:
             # Gestão só pontua alto se a pessoa demonstra querer esse caminho (interesse ou nível atual).
             # Antes, qualquer perfil sênior pontuava ~36% em todos os cargos de gestão e engolia o topo do ranking.
@@ -209,10 +220,10 @@ def ranking(base: Base, hab_usuario, interesse="Sem preferência", nivel=None, e
         })
     return pd.DataFrame(linhas).sort_values("adequacao", ascending=False, kind="stable").reset_index(drop=True)
 
-def principais(rk: pd.DataFrame, interesse="Sem preferência", nivel=None, k=5, max_gestao=2) -> pd.DataFrame:
+def principais(rk: pd.DataFrame, interesse="Sem preferência", nivel=None, k=5, max_gestao=2, interesse2="Nenhum") -> pd.DataFrame:
     """Seleciona as k áreas mais aderentes. Cargos de gestão ficam limitados a max_gestao,
     a menos que a pessoa tenha interesse em liderança ou já esteja em Gestão/Liderança."""
-    if interesse == "Gestão e Liderança" or nivel == "Gestão/Liderança":
+    if "Gestão e Liderança" in (interesse, interesse2) or nivel == "Gestão/Liderança":
         return rk.head(k).reset_index(drop=True)
     escolhidos, n_gestao = [], 0
     for idx, r in rk.iterrows():

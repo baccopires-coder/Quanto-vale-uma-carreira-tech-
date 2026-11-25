@@ -63,11 +63,13 @@ def _sistema_entrevista(base):
     catalogo = "\n".join(f"- {c}: {', '.join(hs)}" for c, hs in base.categorias.items())
     interesses_str = ", ".join(k for k in motor.INTERESSES if k != "Sem preferência")
     return f"""Você conduz uma entrevista curta, em português do Brasil, para o app "{NOME_PROJETO}", de orientação de carreira tech e de dados.
-Objetivo: descobrir (1) TODAS as habilidades, tecnologias, fontes de dados e práticas de IA usadas pelo usuário, (2) tempo de experiência na área, (3) nível atual (incluindo Gestão/Liderança ou Ainda não atuo), (4) macrorregião onde mora e (5) área de maior interesse ({interesses_str}).
+Objetivo: descobrir (1) TODAS as habilidades, tecnologias, fontes de dados e práticas de IA usadas pelo usuário, (2) tempo de experiência na área, (3) nível atual (incluindo Gestão/Liderança ou Ainda não atuo), (4) macrorregião onde mora e (5) área de maior interesse ({interesses_str}) e, se houver, uma segunda área de interesse.
 Regras:
 - Faça UMA pergunta por vez, curta e simpática. No máximo 6 perguntas no total.
 - Quando tiver informação suficiente (ou após 6 perguntas), chame a ferramenta registrar_perfil. Se algo não foi respondido, use os valores neutros.
 - Mapeie TUDO o que a pessoa disser para o catálogo completo abaixo (ex.: "Power BI" -> "Microsoft PowerBI", "Postgres" -> "PostgreSQL", "Excel" -> "Excel / Planilhas Google (análise principal)", "On premise" -> "Servidores On-Premise", "Copilot" -> "Uso soluções do tipo Copilot", "C#" -> "C/C++/C#"). Ignore apenas o que não existir no catálogo.
+- Se a pessoa citar duas áreas de interesse, a que ela destacar vai em interesse e a outra em interesse_secundario; se citar só uma, interesse_secundario = "Nenhum". Não faça pergunta extra só para isso.
+- Quem ainda não atua na área não tem tempo de experiência: use experiencia "Nenhuma" e nivel "Ainda não atuo na área".
 - Estados: converta para macrorregião (ex.: PR -> Sul). Não peça cidade nem endereço.
 - NUNCA pergunte nem use gênero, cor/raça, deficiência, idade, nome ou documentos. Se a pessoa informar, ignore.
 - Não cite salários nem faça recomendações: isso vem do app depois.
@@ -88,6 +90,7 @@ def _ferramenta(base):
                 "nivel": {"type": "string", "enum": NIVEIS},
                 "regiao": {"type": "string", "enum": motor.REGIOES + ["Não informado"]},
                 "interesse": {"type": "string", "enum": list(motor.INTERESSES)},
+                "interesse_secundario": {"type": "string", "enum": motor.INTERESSES_2},
             },
             "required": ["habilidades", "experiencia", "nivel", "regiao", "interesse"],
         },
@@ -111,16 +114,25 @@ def proxima(base, msgs):
 
 
 def validar_perfil(p, base):
-    return {
+    perfil = {
         "habilidades": [h for h in p.get("habilidades", []) if h in base.habilidades],
         "experiencia": p.get("experiencia") if p.get("experiencia") in motor.ORDEM_EXP else "Nenhuma",
         "nivel": p.get("nivel") if p.get("nivel") in NIVEIS else "Ainda não atuo na área",
         "regiao": p.get("regiao") if p.get("regiao") in motor.REGIOES else "Não informado",
         "interesse": p.get("interesse") if p.get("interesse") in motor.INTERESSES else "Sem preferência",
+        "interesse_secundario": p.get("interesse_secundario") if p.get("interesse_secundario") in motor.INTERESSES_2 else "Nenhum",
     }
+    # Coerência entre nível e experiência (vale para o formulário e para a entrevista com IA):
+    if perfil["nivel"] == "Ainda não atuo na área":
+        perfil["experiencia"] = "Nenhuma"  # quem não atua não tem tempo de experiência na área
+    elif perfil["experiencia"] == "Nenhuma":
+        perfil["experiencia"] = motor.ORDEM_EXP[0]  # quem atua tem, no mínimo, "Menos de 1 ano"
+    if perfil["interesse_secundario"] == perfil["interesse"]:
+        perfil["interesse_secundario"] = "Nenhum"
+    return perfil
 
 
-_SISTEMA_ANALISE = f"""Você é um orientador de carreira do app "{NOME_PROJETO}". Recebe um JSON com o perfil da pessoa (habilidades, experiência, nível, região, interesse) e os números JÁ CALCULADOS para as áreas da pesquisa State of Data Brasil 2025-2026 que mais combinam com esse perfil (campo `areas`, já ordenado; `total_profissoes_na_pesquisa` é só o tamanho do universo).
+_SISTEMA_ANALISE = f"""Você é um orientador de carreira do app "{NOME_PROJETO}". Recebe um JSON com o perfil da pessoa (habilidades, experiência, nível, região, interesse e, quando houver, interesse_secundario, que pesa menos que o principal) e os números JÁ CALCULADOS para as áreas da pesquisa State of Data Brasil 2025-2026 que mais combinam com esse perfil (campo `areas`, já ordenado; `total_profissoes_na_pesquisa` é só o tamanho do universo).
 
 Escreva em português do Brasil, em markdown, de 350 a 500 palavras, como alguém conversando com a pessoa: frases claras, sem jargão desnecessário e sem emojis. Cubra:
 1. **Suas áreas mais aderentes:** apresente as áreas do JSON na ordem, com o % de afinidade e o número de respondentes (`respondentes_total`), e explique em uma ou duas frases por área como tecnologias, senioridade, experiência e interesse pesaram.

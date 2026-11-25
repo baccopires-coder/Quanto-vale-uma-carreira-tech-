@@ -284,6 +284,8 @@ p.secao-sub { text-align: center; margin: 0 auto 2rem auto; text-wrap: balance; 
 .sobre-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
 .sobre-item { background: #1C2238; border: 1px solid rgba(255,255,255,.09); border-radius: 12px; padding: 16px 18px; }
 .sobre-item .t { font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: 1.02rem; color: #E6EBF8; margin-bottom: 6px; }
+.sobre-item.largo { grid-column: 1 / -1; }
+.sobre-item.largo p { max-width: 70ch; margin: 0 auto; }
 .sobre-item p { margin: 0; font-size: .9rem; line-height: 1.55; color: #B4C0E4; }
 @media (max-width: 1100px) { .sobre-grid { grid-template-columns: repeat(3, 1fr); } }
 
@@ -568,18 +570,19 @@ def rolar_para(seletor, folga=76):
         components.html(js, height=0)
 
 
-def subir_ao_topo():
-    """Leva a página ao topo ao concluir (ou refazer) a entrevista.
+def subir_ao_topo(destino="resultado"):
+    """Reposiciona a página ao concluir ("resultado": começo de "Seu perfil") ou ao refazer ("topo": início da página).
 
-    Em vez de medir a posição de um elemento, zera a rolagem de todos os contêineres rolantes possíveis e repete por
-    alguns segundos, porque o resultado ainda está sendo montado (a altura da página muda). É disparado no INÍCIO da
-    execução, antes do cálculo do resultado. Se a pessoa rolar por conta própria depois de ~1 s, a repetição para."""
+    Zera a rolagem dos contêineres rolantes (para desfazer as camadas "grudadas") e, no caso do resultado, mede onde
+    começa "Seu perfil" e rola até lá, repetindo por alguns segundos porque o resultado ainda está sendo montado.
+    Dispara no INÍCIO da execução. Se a pessoa rolar por conta própria depois de ~1 s, a repetição para.
+    Roda num iframe (components.html), que executa scripts em qualquer versão do Streamlit; só cai para st.html
+    se isso falhar. O script acha o documento do app subindo pelos iframes (no Cloud o app está dentro de um)."""
     ss_ = st.session_state
     ss_["rolar_n"] = ss_.get("rolar_n", 0) + 1
     js = """<script>
 (function () {
-  // Acha o documento que contém o app. No Streamlit Cloud o app roda dentro de um iframe da página-casca, então
-  // "o pai" pode ser a casca (sem o app); por isso sobe pelos iframes só até achar o conteúdo do app.
+  var DESTINO = "__D__", ID = __N__;
   function docApp() {
     var w = window;
     for (var i = 0; i < 5; i++) {
@@ -592,37 +595,54 @@ def subir_ao_topo():
     }
     return document;
   }
-  var doc = docApp();
-  var win = doc.defaultView || window, t0 = Date.now(), parado = false;
+  var doc = docApp(), win = doc.defaultView || window, t0 = Date.now(), parado = false;
   var SEL = ['[data-testid="stMain"]', '.stMain', 'section.main', '[data-testid="stAppViewContainer"]', '.stAppViewContainer'];
-  function topo() {
+  function direto(e, y) {
+    var b = e.style.scrollBehavior;
+    e.style.scrollBehavior = "auto";   // salto direto, sem o scroll suave do CSS
+    e.scrollTop = y;
+    e.style.scrollBehavior = b;
+  }
+  function zerar() {
     var els = [doc.scrollingElement, doc.documentElement, doc.body];
     SEL.forEach(function (s) { var e = doc.querySelector(s); if (e) els.push(e); });
     var a = doc.querySelector('.st-key-secao_1'), n = a && a.parentElement;
     while (n && n !== doc.documentElement) { els.push(n); n = n.parentElement; }
-    els.forEach(function (e) {
-      if (e && e.scrollTop > 0) {
-        var b = e.style.scrollBehavior;
-        e.style.scrollBehavior = "auto";   // salto direto, sem o scroll suave do CSS
-        e.scrollTop = 0;
-        e.style.scrollBehavior = b;
-      }
-    });
+    els.forEach(function (e) { if (e && e.scrollTop > 0) direto(e, 0); });
     try { win.scrollTo(0, 0); } catch (e) {}
+  }
+  function rolante(el) {
+    var n = el.parentElement;
+    while (n && n !== doc.documentElement) {
+      var oy = win.getComputedStyle(n).overflowY;
+      if ((oy === "auto" || oy === "scroll") && n.scrollHeight > n.clientHeight) return n;
+      n = n.parentElement;
+    }
+    return doc.querySelector('[data-testid="stMain"]') || doc.scrollingElement;
+  }
+  function ir() {
+    if (DESTINO !== "resultado") { zerar(); return true; }
+    var el = doc.querySelector('.st-key-resultado');
+    if (!el) return false;               // o resultado ainda não foi desenhado: tenta de novo no próximo ciclo
+    var sc = rolante(el);
+    direto(sc, 0);                        // sem camadas grudadas, a posição medida é a posição natural
+    var base = (sc === doc.scrollingElement || sc === doc.documentElement) ? 0 : sc.getBoundingClientRect().top;
+    direto(sc, Math.max(0, Math.round(el.getBoundingClientRect().top - base - 76)));  // 76 px: abaixo da barra fixa
+    return true;
   }
   ["wheel", "touchmove", "keydown"].forEach(function (ev) {
     win.addEventListener(ev, function () { if (Date.now() - t0 > 1000) parado = true; }, { passive: true });
   });
-  [0, 50, 150, 300, 600, 1000, 1600, 2400, 3600, 5000].forEach(function (ms) {
-    win.setTimeout(function () { if (!parado) topo(); }, ms);
+  [0, 100, 250, 500, 900, 1400, 2000, 3000, 4500, 6500, 9000].forEach(function (ms) {
+    win.setTimeout(function () { if (!parado && !ir() && ms >= 6500) zerar(); }, ms);
   });
 })();
-</script><!-- __N__ -->""".replace("__N__", str(ss_["rolar_n"]))
+</script>""".replace("__D__", destino).replace("__N__", str(ss_["rolar_n"]))
     try:
-        st.html(js, unsafe_allow_javascript=True)
-    except TypeError:
         import streamlit.components.v1 as components
         components.html(js, height=0)
+    except Exception:
+        st.html(js, unsafe_allow_javascript=True)
 
 
 @st.cache_resource
@@ -734,6 +754,73 @@ def estilizar(fig):
     return fig
 
 
+# ----------------------------------------------------------------------
+# Textos do hover: frases completas em vez de "campo=valor" (e sem o corte "..." do texto automático do Plotly)
+# ----------------------------------------------------------------------
+
+def resp(n):
+    n = int(n)
+    return f"{n} respondente" if n == 1 else f"{n} respondentes"
+
+
+def _minuscula(txt):
+    """'Menos de 1 ano' -> 'menos de 1 ano'; 'Textos/Documentos' -> 'textos/documentos'; 'NoSQL' e siglas ficam como estão."""
+    return re.sub(r"(^|/)([A-ZÁÉÍÓÚÂÊÔÃÕÇ])(?=[a-záéíóúâêôãõç])", lambda m: m.group(1) + m.group(2).lower(), str(txt))
+
+
+def quebra_hover(txt, n=46):
+    """Quebra a frase em linhas de ~n caracteres (o hover do Plotly não quebra sozinho)."""
+    linhas, atual = [], ""
+    for p in str(txt).split():
+        if atual and len(atual) + 1 + len(p) > n:
+            linhas.append(atual)
+            atual = p
+        else:
+            atual = f"{atual} {p}".strip()
+    linhas.append(atual)
+    return "<br>".join(linhas)
+
+
+# Itens de IA generativa são afirmações da pesquisa (1ª pessoa): aqui viram predicados na 3ª pessoa.
+PREDICADO_IA = {
+    "Uso soluções gratuitas de AI Generativa com foco em produtividade":
+        "usam soluções gratuitas de IA generativa para ganhar produtividade",
+    "Uso e pago pelas soluções de AI Generativa com foco em produtividade":
+        "usam e pagam por soluções de IA generativa para ganhar produtividade",
+    "A empresa que trabalho paga pelas soluções de AI Generativa com foco em produtividade":
+        "trabalham numa empresa que paga por soluções de IA generativa para ganhar produtividade",
+    "Uso soluções do tipo Copilot": "usam soluções do tipo Copilot",
+    "Colaboradores usando AI generativa de forma independente e descentralizada":
+        "dizem que, na empresa, as pessoas usam IA generativa de forma independente e descentralizada",
+    "Direcionamento centralizado do uso de AI generativa":
+        "dizem que a empresa direciona de forma centralizada o uso de IA generativa",
+    "Desenvolvedores utilizando Copilots": "dizem que, na empresa, desenvolvedores usam Copilots",
+    "AI Generativa e LLMs para melhorar produtos externos para os clientes finais":
+        "dizem que a empresa usa IA generativa e LLMs para melhorar produtos para os clientes finais",
+    "AI Generativa e LLMs para melhorar produtos internos para os colaboradores":
+        "dizem que a empresa usa IA generativa e LLMs para melhorar produtos internos, para os colaboradores",
+    "IA Generativa e LLMs como principal frente do negócio":
+        "dizem que IA generativa e LLMs são a principal frente do negócio da empresa",
+}
+
+
+def frase_tec(item, categoria, pct, quem):
+    """'91% dos respondentes técnicos usam Python.' / '31% dos respondentes técnicos trabalham numa empresa que paga…'"""
+    if item in PREDICADO_IA:
+        pred = PREDICADO_IA[item]
+    elif categoria == "Fontes e tipos de dados":
+        pred = f"trabalham com {_minuscula(item)}"
+    elif categoria and categoria.startswith("IA generativa"):
+        pred = f"indicam: \u201c{item}\u201d"
+    else:
+        pred = f"usam {item}"
+    return f"{pct:.0%} {quem} {pred}."
+
+
+def ondeq(onde):
+    return "No Brasil" if onde == "Brasil" else f"Na região {onde}"
+
+
 def mostrar(fig, titulo):
     titulo_grafico(titulo)
     st.plotly_chart(estilizar(fig), width="stretch", config=CFG)
@@ -764,7 +851,7 @@ with rodape:
         '<div class="sobre-item"><div class="t">Como ler os salários</div><p>A pesquisa pergunta uma faixa de salário '
         '(por exemplo, de R$ 8.001 a R$ 12.000), então usamos o valor do meio de cada faixa. Os gráficos mostram a '
         '<strong>média</strong>: a soma de todos os salários dividida pelo número de respondentes.</p></div>'
-        '<div class="sobre-item"><div class="t">Limites</div><p>Responderam pessoas voluntárias, a maioria do Sudeste. '
+        '<div class="sobre-item largo"><div class="t">Limites</div><p>Responderam pessoas voluntárias, a maioria do Sudeste. '
         'Os dados são do fim de 2025 e do começo de 2026. A pesquisa não pergunta a cidade, então '
         '<strong>não existe dado por capital</strong>, só por região do Brasil.</p></div>'
         '</div></div>',
@@ -867,6 +954,7 @@ MOMENTO = [
     ("nivel", "Nível atual", 282),
     ("reg", "Região do Brasil onde você mora", 296),
     ("int", "O que mais gosta de fazer", 310),
+    ("int2", "E em segundo lugar, se houver (opcional)", 324),
 ]
 
 
@@ -896,15 +984,30 @@ def formulario():
         nivel = _momento("nivel", "Nível atual", ia.NIVEIS) or "Ainda não atuo na área"
         regiao = _momento("reg", "Região do Brasil onde você mora", motor.REGIOES) or "Não informado"
         interesse = _momento("int", "O que mais gosta de fazer", list(motor.INTERESSES)) or "Sem preferência"
-        if st.form_submit_button("Concluir e ver minha recomendação", type="primary", width="stretch"):
+        interesse2 = _momento("int2", "E em segundo lugar, se houver (opcional)", motor.INTERESSES_2[1:]) or "Nenhum"
+        st.caption(
+            "Se marcar \"Ainda não atuo na área\" em Nível, o tempo de experiência é desconsiderado. "
+            "A segunda área pesa menos que a principal na recomendação."
+        )
+        confirmar = st.session_state.get("avisar_vazio", False)
+        if confirmar:
+            st.warning("Você não marcou nenhuma tecnologia. Sem elas, a recomendação usa só nível, experiência e interesse. "
+                       "Marque as que você usa ou toque de novo para ver o resultado mesmo assim.")
+        if st.form_submit_button("Ver resultado mesmo assim" if confirmar else "Concluir e ver minha recomendação",
+                                 type="primary", width="stretch"):
+            if not escolhidas and not confirmar:
+                st.session_state.avisar_vazio = True  # evita o envio sem querer: pede uma segunda confirmação
+                st.rerun()
+            st.session_state.pop("avisar_vazio", None)
             st.session_state.perfil = ia.validar_perfil(
-                dict(habilidades=escolhidas, experiencia=exp, nivel=nivel, regiao=regiao, interesse=interesse), base
+                dict(habilidades=escolhidas, experiencia=exp, nivel=nivel, regiao=regiao, interesse=interesse,
+                     interesse_secundario=interesse2), base
             )
             st.session_state.rolar = "resultado"
             st.rerun()
 
 
-def comparativo(br, rg, col, ordem, titulo, regiao, linha=False):
+def comparativo(br, rg, col, ordem, titulo, regiao, linha=False, cargo=None):
     partes = [br.assign(Onde="Brasil")]
     if not rg.empty:
         partes.append(rg.assign(Onde=regiao))
@@ -913,17 +1016,25 @@ def comparativo(br, rg, col, ordem, titulo, regiao, linha=False):
     if d.empty:
         st.info(f"Ainda não há respondentes suficientes (mínimo de {MIN_N}) para mostrar este recorte.")
         return
+    prof = f"quem atua como {cargo}" if cargo else "quem atua na área"
+
+    def _frase(r):
+        v = str(r[col])
+        quem = f"{prof} no nível {v}" if col == "senioridade" else f"{prof} e tem {_minuscula(v)} de experiência"
+        return quebra_hover(f"{ondeq(r['Onde'])}, {quem} ganha, em média, {moeda(r['media'])} por mês ({resp(r['n'])}).")
+
+    d["hover"] = d.apply(_frase, axis=1)
     kw = dict(
         x=col,
         y="media",
         color="Onde",
-        custom_data=["n"],
+        custom_data=["hover"],
         category_orders={col: ordem},
         color_discrete_sequence=PAR,
         labels={"media": "Salário médio (R$/mês)", col: ""},
     )
     fig = px.line(d, markers=True, **kw) if linha else px.bar(d, barmode="group", **kw)
-    fig.update_traces(hovertemplate="%{x}<br>Média: R$ %{y:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>")
+    fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
     if linha:
         fig.update_traces(line=dict(width=4), marker=dict(size=10))
     mostrar(fig, titulo)
@@ -947,25 +1058,25 @@ def radar(dg, cargo):
     eixos = list(dg["eixo"]) + [dg["eixo"].iloc[0]]
     rotulos = [_quebra(e) for e in eixos]
 
-    def serie(col, nome, cor, dash, width, fill=None):
+    def serie(col, nome, cor, dash, width, fill=None, quem="você"):
         v = list(dg[col]) + [dg[col].iloc[0]]
         return go.Scatterpolar(
             r=v,
             theta=rotulos,
-            customdata=eixos,
+            customdata=[quebra_hover(f"Em {e}, {quem} está em {v:.0f}%.", 40) for e, v in zip(eixos, v)],
             name=nome,
             mode="lines+markers",
             fill="toself" if fill else None,
             fillcolor=fill,
             line=dict(color=cor, width=width, dash=dash),
             marker=dict(size=6),
-            hovertemplate="%{customdata}<br>" + nome + ": %{r:.0f}%<extra></extra>",
+            hovertemplate="%{customdata}<extra></extra>",
         )
 
     fig = go.Figure([
-        serie("comunidade", "Média da pesquisa", "#E5E7EB", "dash", 2),
-        serie("alvo", "Perfil típico da profissão", AMBAR, "dot", 3),
-        serie("voce", "Você", TEAL, "solid", 4, fill="rgba(53,208,186,.2)"),
+        serie("comunidade", "Média da pesquisa", "#E5E7EB", "dash", 2, quem="a média de todos os respondentes"),
+        serie("alvo", "Perfil típico da profissão", AMBAR, "dot", 3, quem="o profissional típico da profissão"),
+        serie("voce", "Você", TEAL, "solid", 4, fill="rgba(53,208,186,.2)", quem="você"),
     ])
     fig = estilizar(fig)
     fig.update_layout(
@@ -1042,6 +1153,8 @@ def perfil_html(perfil):
     ordenadas = [h for hs in base.categorias.values() for h in sorted(hs, key=_chave_alfa) if h in marcadas]
     fatos = [("Experiência", perfil["experiencia"]), ("Nível", perfil["nivel"]),
              ("Região", perfil["regiao"]), ("Interesse", perfil["interesse"])]
+    if perfil.get("interesse_secundario", "Nenhum") != "Nenhum":
+        fatos.append(("Em segundo lugar", perfil["interesse_secundario"]))
     fatos_html = "".join(f"<div><span>{_html.escape(k)}</span><b>{_html.escape(str(v))}</b></div>" for k, v in fatos)
     bloco = ""
     if ordenadas:
@@ -1101,6 +1214,7 @@ def resultado(perfil):
         interesse=perfil["interesse"],
         experiencia=perfil["experiencia"],
         nivel=perfil["nivel"],
+        interesse2=perfil.get("interesse_secundario", "Nenhum"),
     )
     reg = perfil["regiao"]
     st.subheader("Seu perfil")
@@ -1111,7 +1225,8 @@ def resultado(perfil):
         st.error("Ainda não há respondentes suficientes para fazer uma recomendação com esse perfil.")
         return
 
-    top = motor.principais(rk, perfil["interesse"], perfil["nivel"], k=TOP_AREAS)
+    top = motor.principais(rk, perfil["interesse"], perfil["nivel"], k=TOP_AREAS,
+                           interesse2=perfil.get("interesse_secundario", "Nenhum"))
     salarios = motor.panorama_todas_profissoes(base).set_index("cargo")["media_brasil"].to_dict()
 
     st.subheader(
@@ -1191,6 +1306,12 @@ def resultado(perfil):
             st.info("Este cargo de gestão não tem dados técnicos na pesquisa.")
         else:
             hab["Situação"] = hab["tem"].map({True: "Você já usa", False: "Para desenvolver"})
+            cat_de = {h: c for c, hs in base.categorias.items() for h in hs}
+            hab["hover"] = [
+                quebra_hover(frase_tec(r.habilidade, cat_de.get(r.habilidade), r.pct, f"dos respondentes de {cargo}"))
+                + ("<br><i>Você já usa.</i>" if r.tem else "<br><i>Para desenvolver.</i>")
+                for r in hab.itertuples()
+            ]
             fig = px.bar(
                 hab.sort_values("pct"),
                 x="pct",
@@ -1199,33 +1320,41 @@ def resultado(perfil):
                 color="Situação",
                 color_discrete_map={"Você já usa": TEAL, "Para desenvolver": AMBAR},
                 category_orders={"Situação": ["Você já usa", "Para desenvolver"]},
+                custom_data=["hover"],
                 labels={"pct": "% dos respondentes da profissão que usam", "habilidade": ""},
             )
+            fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
             fig.update_xaxes(tickformat=".0%")
             fig.update_layout(height=max(420, len(hab) * 24))
             mostrar(fig, f"Tecnologias e práticas usadas em: {cargo}")
     with g2:
-        comparativo(t["nivel_br"], t["nivel_reg"], "senioridade", ORDEM_NIVEL, "Salário médio por nível de carreira", reg)
+        comparativo(t["nivel_br"], t["nivel_reg"], "senioridade", ORDEM_NIVEL, "Salário médio por nível de carreira", reg,
+                    cargo=cargo)
     g3, g4 = st.columns(2)
     with g3:
         comparativo(
-            t["exp_br"], t["exp_reg"], "experiencia", ORDEM_EXP, "Salário médio por tempo de experiência", reg, linha=True
+            t["exp_br"], t["exp_reg"], "experiencia", ORDEM_EXP, "Salário médio por tempo de experiência", reg, linha=True,
+            cargo=cargo,
         )
     with g4:
         r = t["regioes"]
         if r.empty:
             st.info(f"Nenhuma região do Brasil tem {MIN_N} respondentes ou mais para esta profissão.")
         else:
+            r = r.assign(hover=[
+                quebra_hover(f"Na região {x.regiao}, quem atua como {cargo} ganha, em média, {moeda(x.media)} por mês ({resp(x.n)}).")
+                for x in r.itertuples()
+            ])
             fig = px.bar(
                 r,
                 x="regiao",
                 y="media",
                 color="media",
                 color_continuous_scale=ESCALA,
-                custom_data=["n"],
+                custom_data=["hover"],
                 labels={"media": "Salário médio (R$/mês)", "regiao": ""},
             )
-            fig.update_traces(hovertemplate="%{x}<br>Média: R$ %{y:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>")
+            fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
             mostrar(fig, "Salário médio por região do Brasil")
     with st.expander("Ver os valores por nível de carreira"):
         x = t["nivel_br"].copy()
@@ -1264,8 +1393,9 @@ with sec1:
     )
     ss = st.session_state
     ss.setdefault("perfil", None)
-    if ss.pop("rolar", None):
-        subir_ao_topo()  # antes de montar o resultado: a página já volta ao topo enquanto o resto carrega
+    destino = ss.pop("rolar", None)
+    if destino:
+        subir_ao_topo("topo" if destino == "topo" else "resultado")  # dispara antes de montar o resultado
     if ss.perfil is None:
         if ia.disponivel():
             modo = st.radio("Como prefere responder?", ["Entrevista com IA", "Formulário rápido"], horizontal=True)
@@ -1277,7 +1407,7 @@ with sec1:
             formulario()
     else:
         if st.button("Refazer entrevista"):
-            for k in ("perfil", "msgs", "analise", "analise_chave", "cargo_sel", "cargo_mais"):
+            for k in ("perfil", "msgs", "analise", "analise_chave", "cargo_sel", "cargo_mais", "avisar_vazio"):
                 ss.pop(k, None)
             ss.rolar = "topo"
             st.rerun()
@@ -1354,6 +1484,10 @@ with sec2:
         a, b = st.columns(2)
         with a:
             pc = motor.resumo(d, "cargo").sort_values("media")
+            pc["hover"] = [
+                quebra_hover(f"Nesta seleção, quem atua como {x.cargo} ganha, em média, {moeda(x.media)} por mês ({resp(x.n)}).")
+                for x in pc.itertuples()
+            ]
             fig = px.bar(
                 pc,
                 x="media",
@@ -1361,15 +1495,20 @@ with sec2:
                 orientation="h",
                 color="cargo",
                 color_discrete_map=COR_CARGO,
-                custom_data=["n"],
+                custom_data=["hover"],
                 labels={"media": "Salário médio (R$/mês)", "cargo": ""},
             )
-            fig.update_traces(hovertemplate="%{y}<br>Média: R$ %{x:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>")
+            fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
             fig.update_layout(height=max(420, len(pc) * 30), showlegend=False)
             mostrar(fig, f"Salário médio por profissão (só profissões com {MIN_N} respondentes ou mais)")
         with b:
             fx = d.faixa_salarial.value_counts().reindex(motor.ORDEM_FAIXAS, fill_value=0).reset_index()
             fx.columns = ["faixa", "quantidade"]
+            total_fx = int(fx.quantidade.sum()) or 1
+            fx["hover"] = [
+                quebra_hover(f"Ganham {_minuscula(x.faixa)}: {resp(x.quantidade)} ({x.quantidade / total_fx:.0%} da seleção).")
+                for x in fx.itertuples()
+            ]
             fx["faixa"] = fx.faixa.map(_faixa_curta)
             fig = px.bar(
                 fx,
@@ -1377,8 +1516,10 @@ with sec2:
                 y="quantidade",
                 color="faixa",
                 color_discrete_sequence=rampa(len(fx)),
+                custom_data=["hover"],
                 labels={"faixa": "Faixa salarial (R$/mês)", "quantidade": "Respondentes"},
             )
+            fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
             fig.update_xaxes(tickangle=-45, tickfont=dict(size=11))
             fig.update_layout(showlegend=False)
             mostrar(fig, "Quantos respondentes há em cada faixa de salário (R$ por mês)")
@@ -1397,8 +1538,15 @@ with sec2:
         with c:
             mt = d.modelo_trabalho.value_counts().reset_index()
             mt.columns = ["modelo", "quantidade"]
-            fig = px.pie(mt, names="modelo", values="quantidade", hole=0.55, color_discrete_sequence=CORES_CAT)
+            total_mt = int(mt.quantidade.sum()) or 1
+            mt["hover"] = [
+                quebra_hover(f"Trabalham no modelo {x.modelo}: {resp(x.quantidade)} ({x.quantidade / total_mt:.0%} da seleção).")
+                for x in mt.itertuples()
+            ]
+            fig = px.pie(mt, names="modelo", values="quantidade", hole=0.55, color_discrete_sequence=CORES_CAT,
+                         custom_data=["hover"])
             fig.update_traces(
+                hovertemplate="%{customdata[0]}<extra></extra>",
                 textinfo="percent",
                 textfont=dict(color=BG, size=14),
                 marker=dict(line=dict(color=BG, width=2)),
@@ -1434,8 +1582,11 @@ with sec2:
                             colorscale=ESCALA,
                             z=[pr.loc[UF_REGIAO[u], "media"] for u in ufs],
                             text=[UF_REGIAO[u] for u in ufs],
-                            customdata=[[int(pr.loc[UF_REGIAO[u], "n"])] for u in ufs],
-                            hovertemplate="<b>%{text}</b><br>Média: R$ %{z:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>",
+                            customdata=[[quebra_hover(
+                                f"Na região {UF_REGIAO[u]}, quem está nesta seleção ganha, em média, "
+                                f"{moeda(pr.loc[UF_REGIAO[u], 'media'])} por mês ({resp(pr.loc[UF_REGIAO[u], 'n'])}).")]
+                                for u in ufs],
+                            hovertemplate="%{customdata[0]}<extra></extra>",
                             marker_line_color=BG,
                             marker_line_width=0.8,
                             colorbar=dict(
@@ -1458,26 +1609,39 @@ with sec2:
         h, i = st.columns(2)
         with h:
             pn = motor.resumo(d, "senioridade").pipe(motor._ordenar, "senioridade", ORDEM_NIVEL)
+            pn["hover"] = [
+                quebra_hover(f"Nesta seleção, quem está no nível {x.senioridade} ganha, em média, {moeda(x.media)} por mês ({resp(x.n)}).")
+                for x in pn.itertuples()
+            ]
             fig = px.bar(
                 pn,
                 x="senioridade",
                 y="media",
                 color="senioridade",
                 color_discrete_map=COR_NIVEL,
+                custom_data=["hover"],
                 labels={"senioridade": "", "media": "Salário médio (R$/mês)"},
             )
+            fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
             fig.update_layout(showlegend=False)
             mostrar(fig, "Salário médio por senioridade")
         with i:
             pe = motor.resumo(d, "experiencia").pipe(motor._ordenar, "experiencia", ORDEM_EXP)
+            pe["hover"] = [
+                quebra_hover(f"Nesta seleção, quem tem {_minuscula(x.experiencia)} de experiência em dados ganha, em média, "
+                             f"{moeda(x.media)} por mês ({resp(x.n)}).")
+                for x in pe.itertuples()
+            ]
             fig = px.line(
                 pe,
                 x="experiencia",
                 y="media",
                 markers=True,
+                custom_data=["hover"],
                 labels={"experiencia": "Experiência em dados", "media": "Salário médio (R$/mês)"},
             )
-            fig.update_traces(line=dict(color=TEAL, width=4), marker=dict(size=11, color=AMBAR))
+            fig.update_traces(line=dict(color=TEAL, width=4), marker=dict(size=11, color=AMBAR),
+                              hovertemplate="%{customdata[0]}<extra></extra>")
             mostrar(fig, "Salário médio por tempo de experiência")
 
     st.caption("Para proteger a privacidade (LGPD), mostramos só resultados somados, nunca as respostas de cada pessoa.")
@@ -1512,7 +1676,8 @@ with sec3:
         labels={"pct": "Parte das diferenças de salário que o fator explica", "Fator": ""},
     )
     fig.update_xaxes(tickformat=".0%")
-    fig.update_traces(hovertemplate="%{y}: explica %{x:.1%} das diferenças de salário<extra></extra>")
+    fig.update_traces(hovertemplate="%{y} explica %{x:.1%} das diferenças<br>de salário entre os respondentes.<extra></extra>")
+    fig.update_layout(separators=",.")  # vírgula decimal no tooltip ("31,6%")
     mostrar(fig, "Quanto cada fator explica das diferenças de salário")
     p_sen = float(e2.loc[e2.Fator == "Senioridade", "pct"].iloc[0])
     p_reg = float(e2.loc[e2.Fator == "Região do Brasil", "pct"].iloc[0])
@@ -1538,6 +1703,10 @@ with sec3:
     if hg.empty:
         st.info(f"Ainda não há respondentes suficientes (mínimo de {MIN_N}) para mostrar esta comparação.")
     else:
+        hg = hg.assign(hover=[
+            quebra_hover(f"No nível {x.senioridade}, o grupo {x.grupo} ganha, em média, {moeda(x.media)} por mês ({resp(x.n)}).")
+            for x in hg.itertuples()
+        ])
         fig = px.bar(
             hg,
             x="senioridade",
@@ -1546,12 +1715,10 @@ with sec3:
             barmode="group",
             category_orders={"senioridade": ORDEM_NIVEL},
             color_discrete_map=GRUPO_COR,
-            custom_data=["n", "grupo"],
+            custom_data=["hover"],
             labels={"media": "Salário médio (R$/mês)", "senioridade": ""},
         )
-        fig.update_traces(
-            hovertemplate="%{customdata[1]}, %{x}<br>Média: R$ %{y:,.0f}<br>Respondentes: %{customdata[0]}<extra></extra>"
-        )
+        fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
         mostrar(fig, "Salário médio por grupo de profissões e nível de carreira")
         sr = hg[hg["senioridade"] == "Sênior"].sort_values("media")
         if len(sr) >= 2:
@@ -1570,7 +1737,11 @@ with sec3:
     freq_df = base.freq_geral.reset_index()
     freq_df.columns = ["tecnologia", "pct_uso"]
     freq_df["categoria"] = freq_df["tecnologia"].map({h: cat for cat, hs in base.categorias.items() for h in hs})
-    top_tec = freq_df.sort_values("pct_uso", ascending=False).head(20).sort_values("pct_uso")
+    top_tec = freq_df.sort_values("pct_uso", ascending=False).head(20).sort_values("pct_uso").copy()
+    top_tec["hover"] = [
+        quebra_hover(frase_tec(x.tecnologia, x.categoria, x.pct_uso, "dos respondentes técnicos")) + f"<br><i>Tipo: {x.categoria}</i>"
+        for x in top_tec.itertuples()
+    ]
     fig = px.bar(
         top_tec,
         x="pct_uso",
@@ -1578,8 +1749,10 @@ with sec3:
         color="categoria",
         orientation="h",
         color_discrete_map={c: hexhsl(h, 58, 64) for c, h in MATIZ_CAT.items()},
+        custom_data=["hover"],
         labels={"pct_uso": "% dos respondentes que usam", "tecnologia": "", "categoria": "Tipo"},
     )
+    fig.update_traces(hovertemplate="%{customdata[0]}<extra></extra>")
     fig.update_xaxes(tickformat=".0%")
     fig.update_layout(height=max(460, len(top_tec) * 24))
     mostrar(fig, "As 20 tecnologias e práticas mais usadas")

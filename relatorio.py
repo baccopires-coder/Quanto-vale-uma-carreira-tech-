@@ -251,9 +251,11 @@ def _capa(agora):
 def _perfil(perfil):
     fatos = [("Experiência", perfil["experiencia"]), ("Nível", perfil["nivel"]),
              ("Região", perfil["regiao"]), ("Interesse", perfil["interesse"])]
+    if perfil.get("interesse_secundario", "Nenhum") != "Nenhum":
+        fatos.append(("Em segundo lugar", perfil["interesse_secundario"]))
     celulas = [[Paragraph(f'<font color="#6B7280" size="7.5">{_t(k.upper())}</font><br/><b>{_t(v)}</b>', EST["cel"])
                 for k, v in fatos]]
-    t = Table(celulas, colWidths=[LARGURA / 4] * 4)
+    t = Table(celulas, colWidths=[LARGURA / len(fatos)] * len(fatos))
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), ROXO_CLARO), ("BOX", (0, 0), (-1, -1), 0.5, LINHA),
         ("LINEAFTER", (0, 0), (-2, -1), 0.5, colors.white),
