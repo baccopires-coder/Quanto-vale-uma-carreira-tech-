@@ -387,6 +387,12 @@ div.como { text-align: center; color: #9FB0D6; font-size: .95rem; margin: 0 auto
 @media (max-width: 768px) { .st-key-secao_1 { padding-top: 5.2rem; } .st-key-secao_2, .st-key-secao_3 { padding-top: 3rem; }
   [class*="st-key-caixa_"] { padding: 16px 14px 18px !important; } }
 @media (prefers-reduced-motion: reduce) { [data-testid="stMain"] { scroll-behavior: auto; } }
+/* radar: duas versões do mesmo gráfico (tamanhos diferentes), cada uma aparece só no seu tipo de tela; o corte é o mesmo em que as colunas do Streamlit empilham */
+.st-key-radar_cel { display: none; }
+@media (max-width: 640px) {
+  .st-key-radar_pc { display: none; }
+  .st-key-radar_cel { display: block; margin-left: -.6rem; margin-right: -.6rem; }
+}
 """
 
 for _k, _v in {"__TEAL__": TEAL, "__AMBAR__": AMBAR, "__ROXO_ESCURO__": ROXO_ESCURO, "__AZUL__": AZUL, "__BG__": BG}.items():
@@ -1091,6 +1097,7 @@ def comparativo(br, rg, col, ordem, titulo, regiao, linha=False, cargo=None):
 
 
 def _quebra(texto, n=11):
+    texto = texto.replace("(produtividade)", "(produti-<br>vidade)")  # palavra longa: parte ao meio para o rótulo ocupar menos largura
     linhas, atual = [], ""
     for p in texto.split():
         if atual and len(atual) + 1 + len(p) > n:
@@ -1102,9 +1109,10 @@ def _quebra(texto, n=11):
     return "<br>".join(linhas)
 
 
-def radar(dg, cargo):
+def radar(dg, cargo, compacto=False):
+    """compacto=True: versão para celular (menos margem, para o círculo ocupar quase toda a largura); False: computador."""
     eixos = list(dg["eixo"]) + [dg["eixo"].iloc[0]]
-    rotulos = [_quebra(e) for e in eixos]
+    rotulos = [_quebra(e, 11 if compacto else 14) for e in eixos]
 
     def serie(col, nome, cor, dash, width, fill=None, quem="você"):
         v = list(dg[col]) + [dg[col].iloc[0]]
@@ -1128,8 +1136,8 @@ def radar(dg, cargo):
     ])
     fig = estilizar(fig)
     fig.update_layout(
-        margin=dict(l=80, r=62, t=30, b=60),  # laterais só do tamanho dos rótulos: sobra mais espaço para o radar no celular
-        height=400,
+        margin=dict(l=62, r=64, t=26, b=64) if compacto else dict(l=78, r=78, t=36, b=70),
+        height=340 if compacto else 500,
         legend=dict(orientation="h", y=-0.1, x=0.5, xanchor="center", yanchor="top"),
         polar=dict(
             bgcolor="rgba(0,0,0,0)",
@@ -1141,12 +1149,12 @@ def radar(dg, cargo):
                 tickangle=0,  # números na horizontal
                 gridcolor="rgba(255,255,255,.22)",
                 linecolor="rgba(255,255,255,.22)",
-                tickfont=dict(size=11, color="#F1F5FF"),
+                tickfont=dict(size=11 if compacto else 12, color="#F1F5FF"),
             ),
             angularaxis=dict(
                 gridcolor="rgba(255,255,255,.14)",
                 linecolor="rgba(255,255,255,.14)",
-                tickfont=dict(size=10, color="#CBD3EA"),
+                tickfont=dict(size=10 if compacto else 12, color="#CBD3EA"),
             ),
         ),
     )
@@ -1322,7 +1330,10 @@ def resultado(perfil):
     gr, gl = st.columns([3, 2], gap="large")
     with gr:
         titulo_grafico(f"Você x {cargo}")
-        st.plotly_chart(radar(dg, cargo), width="stretch", config=CFG)
+        with st.container(key="radar_pc"):
+            st.plotly_chart(radar(dg, cargo), width="stretch", config=CFG, key="radar_g_pc")
+        with st.container(key="radar_cel"):
+            st.plotly_chart(radar(dg, cargo, compacto=True), width="stretch", config=CFG, key="radar_g_cel")
     with gl:
         st.markdown("##### Todas as lacunas identificadas")
         html_lac, fortes = lacunas_html(dg)
