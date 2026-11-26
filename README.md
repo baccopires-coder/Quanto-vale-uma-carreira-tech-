@@ -1,4 +1,12 @@
-# Quanto vale uma carreira tech?
+# 💼 Quanto vale uma carreira tech?
+
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-app-FF4B4B?logo=streamlit&logoColor=white)
+![pandas](https://img.shields.io/badge/pandas-an%C3%A1lise-150458?logo=pandas&logoColor=white)
+![Plotly](https://img.shields.io/badge/Plotly-gr%C3%A1ficos-3F4F75?logo=plotly&logoColor=white)
+![IA](https://img.shields.io/badge/IA-opcional-8A2BE2)
+
+🔗 **[Acessar o app publicado](https://baccopires-coder-quanto-vale-uma-carreira-tech--app-dx6xhg.streamlit.app/)**
 
 > Projeto final da turma 2026 do **Códigos do Amanhã** (EBANX em parceria com a HOW Bootcamps, trilha Análise de Dados · Big Data · IA).
 
@@ -21,13 +29,33 @@ do projeto roda **sem chave**, no modo formulário; a camada de IA está impleme
 
 ---
 
+## 📑 Sumário
+
+1. [Identificação](#1-identificação)
+2. [Problema, decisão que apoia e impacto](#2-problema-decisão-que-apoia-e-impacto)
+3. [Hipóteses de trabalho e principais achados](#3-hipóteses-de-trabalho)
+4. [Dados](#4-dados)
+5. [Como os números são calculados](#5-como-os-números-são-calculados)
+6. [Arquivos e arquitetura](#6-arquivos)
+7. [Uso de IA no projeto](#7-uso-de-ia-no-projeto)
+8. [Escolhas de construção do front-end](#8-escolhas-de-construção-do-front-end)
+9. [Desafios, ética e privacidade](#9-desafios-ética-e-privacidade)
+10. [Cronograma e distribuição de tarefas](#10-cronograma-e-distribuição-de-tarefas)
+11. [Rodar no seu computador](#11-rodar-no-seu-computador-windows-powershell)
+12. [Publicar no Streamlit Community Cloud](#12-publicar-no-streamlit-community-cloud)
+13. [Histórico de melhorias e próximos passos](#13-histórico-de-melhorias)
+14. [Autoria](#14-autoria)
+15. [Fontes e créditos](#15-fontes-e-créditos)
+
+---
+
 ## 1. Identificação
 
 | | |
 |---|---|
 | **Título** | Quanto vale uma carreira tech? |
 | **Integrantes** | Bacco Pires |
-| **Programa** | Códigos do Amanhã 2026 (EBANX | HOW) |
+| **Programa** | Códigos do Amanhã 2026 (EBANX em parceria com a HOW Bootcamps) |
 | **App publicado** | <https://baccopires-coder-quanto-vale-uma-carreira-tech--app-dx6xhg.streamlit.app/> |
 | **Versão inicial (dashboard)** | <https://projeto-salarios-por-senioridade-sjpzwqwtfs4vujbg7o9pgx.streamlit.app/> |
 
@@ -65,12 +93,19 @@ Indícios da análise exploratória inicial (faixa salarial convertida no ponto 
 
 Esta é uma leitura exploratória: mostra o que aparece nos dados, **não prova causa**.
 
+### O que os dados sugerem
+
+- **A evolução de nível pesa mais do que o endereço.** A mediana salarial praticamente quadruplica do nível Júnior (R$ 5.000) ao de Especialista/Staff+ e Gestão (R$ 18.000), enquanto a mediana fica em R$ 10.000 em todas as regiões. A região parece influenciar menos o salário típico do que a progressão na carreira.
+- **A área de atuação importa dentro do mesmo nível.** Entre Seniores, ciência e engenharia de dados têm mediana de R$ 14.000, contra R$ 10.000 em análise de dados e BI.
+- **Tecnologias pedem priorização.** A H3 testa, no app, se um conjunto pequeno de tecnologias concentra o uso. Se isso se confirma, aprender vira uma decisão de priorização: começar pelo núcleo mais usado da área-alvo e só depois expandir.
+- **Conclusão prática:** para quem está começando ou migrando, a decisão de maior impacto tende a ser *qual trilha seguir e como avançar de nível*, e não necessariamente *onde morar*. O app transforma isso em lacunas concretas de aprendizado e em uma referência salarial com o número de respondentes à vista.
+
 ## 4. Dados
 
 ### Fonte
 
 - **State of Data Brasil 2025-2026**, pesquisa anual da comunidade Data Hackers com a Bain & Company: <https://www.bain.com/pt-br/insights/state-of-data-2025/>
-- Dados abertos no Kaggle (organização Data Hackers): _[colar aqui o link direto do dataset 2025-2026]_
+- Dados abertos no Kaggle, publicados pela organização Data Hackers (dataset State of Data 2025-2026).
 - Arquivo usado: CSV da pesquisa, guardado em `dados/`.
 - Divulgação dos microdados: Data Hackers News.
 - Mapa dos estados (painel geral): GeoJSON do repositório `click_that_hood`, baixado da internet.
@@ -119,6 +154,31 @@ profissão e as tecnologias/práticas de cada respondente (linguagens, bancos de
 | `requirements.txt` | Dependências |
 | `.streamlit/config.toml` | Tema escuro fixo (este arquivo **vai** para o GitHub; o `secrets.toml` **não**) |
 | `dados/` | CSV da pesquisa (o app lê daqui) |
+
+### Fluxo da aplicação
+
+```mermaid
+flowchart LR
+    A[(CSV State of Data<br>dados/)] --> B[motor.py<br>tratamento e cálculos]
+    F[Formulário ou<br>entrevista com IA] --> B
+    B --> C[app.py<br>Streamlit + Plotly]
+    B --> D[relatorio.py<br>PDF do diagnóstico]
+    B -- JSON com números já calculados --> E[ia.py<br>Claude, opcional]
+    E --> C
+```
+
+O cálculo fica todo no `motor.py`; a interface, o PDF e a camada de IA apenas consomem os resultados.
+
+### Tecnologias utilizadas
+
+| Camada | Ferramenta |
+|---|---|
+| Linguagem e análise | Python, pandas |
+| Interface | Streamlit |
+| Gráficos | Plotly |
+| Relatório em PDF | reportlab |
+| IA (opcional) | API da Anthropic (Claude) |
+| Publicação | Streamlit Community Cloud |
 
 ## 7. Uso de IA no projeto
 
@@ -272,9 +332,16 @@ Depois, cada `git push` atualiza o app sozinho (de alguns segundos a poucos minu
 - **Origem:** o projeto começou como um dashboard de salários por senioridade, região e cargo (versão inicial, link na seção 1) e evoluiu para o recomendador de carreira com diagnóstico e entrevista por IA.
 - **Baixar meu diagnóstico em PDF** no topo do resultado: o arquivo segue a profissão selecionada no diagnóstico e inclui a análise personalizada.
 
+### Próximos passos
+
+- [ ] Atualizar a base quando novas edições da pesquisa State of Data forem publicadas.
+- [ ] Criar testes automatizados para as funções do `motor.py` (ranking, afinidade e hipóteses).
+- [ ] Automatizar a ingestão e o tratamento dos dados em um pipeline reprodutível, separado da interface.
+- [ ] Publicar uma versão com a camada de IA ativa, com controle de custo e limite de uso.
+
 ## 14. Autoria
 
-- Bacco Pires
+**Bacco Pires** · [LinkedIn](https://www.linkedin.com/in/bacco-pires)
 
 ## 15. Fontes e créditos
 
